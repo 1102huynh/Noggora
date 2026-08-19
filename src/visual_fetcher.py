@@ -1,7 +1,13 @@
-"""Fetch B-roll for a video: Pexels video search by keyword, with a local
-fallback that guarantees this function never returns an empty list — this is
-the step most likely to fail (no key, no results, rate limit), so it must
-degrade gracefully rather than crash the job.
+"""Fetch B-roll for a video: Pexels video search by keyword, then Pixabay as a
+second online source, then a local fallback that guarantees this function
+never returns an empty list — this is the step most likely to fail (no key,
+no results, rate limit), so it must degrade gracefully rather than crash the
+job.
+
+Both Pexels and Pixabay are used specifically because their standard license
+grants free commercial use with no attribution required — the same
+requirement that rules out sourcing clips from places like Pinterest, which
+mostly re-hosts other people's images with no license to redistribute.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from src.utils import get_logger, retry_network
 log = get_logger("visual_fetcher")
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
+PIXABAY_SEARCH_URL = "https://pixabay.com/api/videos/"
 
 # Niche keywords ensure every search stays anchored to the channel's
 # psychology/mind visual identity, even when the topic yields no usable
@@ -103,6 +110,32 @@ def _pick_video_file(video: dict) -> str | None:
     return files[0]["link"]
 
 
+@retry_network(max_attempts=3)
+def _search_pixabay(keyword: str, api_key: str, min_duration: int) -> list[dict]:
+    resp = requests.get(
+        PIXABAY_SEARCH_URL,
+        params={"key": api_key, "q": keyword, "video_type": "film", "safesearch": "true", "per_page": 10},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    hits = resp.json().get("hits", [])
+    return [v for v in hits if v.get("duration", 0) >= min_duration]
+
+
+def _pick_pixabay_video_file(video: dict) -> str | None:
+    """Pick a rendition around 1080p wide, preferring portrait/square framing
+    when Pixabay offers it (unlike Pexels, Pixabay doesn't support an
+    orientation search filter, so most hits are landscape)."""
+    sizes = video.get("videos", {})
+    files = [s for s in sizes.values() if s.get("url")]
+    if not files:
+        return None
+    portrait = [f for f in files if f.get("height", 0) >= f.get("width", 1)]
+    candidates = portrait or files
+    candidates.sort(key=lambda f: abs((f.get("width") or 0) - 1080))
+    return candidates[0]["url"]
+
+
 def _download(url: str, dest: Path) -> Path:
     with requests.get(url, stream=True, timeout=30) as resp:
         resp.raise_for_status()
@@ -133,18 +166,19 @@ def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dic
     clips_dir.mkdir(parents=True, exist_ok=True)
     visuals_cfg = cfg.get("visuals", {})
     min_duration = visuals_cfg.get("min_clip_sec", 6)
-    api_key = os.getenv("PEXELS_API_KEY", "").strip()
+    pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
+    pixabay_key = os.getenv("PIXABAY_API_KEY", "").strip()
 
     picked: list[Path] = []
+    used_urls: set[str] = set()
     keywords = _extract_keywords(topic, script, n=n_clips + len(NICHE_KEYWORDS), language=language)
 
-    if api_key:
-        used_urls: set[str] = set()
+    if pexels_key:
         for keyword in keywords:
             if len(picked) >= n_clips:
                 break
             try:
-                results = _search_pexels(keyword, api_key, min_duration)
+                results = _search_pexels(keyword, pexels_key, min_duration)
             except Exception as e:
                 log.warning("Pexels search for %r failed: %s", keyword, e)
                 continue
@@ -164,7 +198,36 @@ def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dic
                 picked.append(dest)
         log.info("Pexels supplied %d/%d clip(s)", len(picked), n_clips)
     else:
-        log.info("PEXELS_API_KEY not set — using local fallback assets only")
+        log.info("PEXELS_API_KEY not set — skipping Pexels")
+
+    # --- second online source: Pixabay (same free-commercial-use license as Pexels) ---
+    if len(picked) < n_clips and pixabay_key:
+        before = len(picked)
+        for keyword in keywords:
+            if len(picked) >= n_clips:
+                break
+            try:
+                results = _search_pixabay(keyword, pixabay_key, min_duration)
+            except Exception as e:
+                log.warning("Pixabay search for %r failed: %s", keyword, e)
+                continue
+            for video in results:
+                if len(picked) >= n_clips:
+                    break
+                link = _pick_pixabay_video_file(video)
+                if not link or link in used_urls:
+                    continue
+                dest = clips_dir / f"pixabay_{len(picked)}_{video['id']}.mp4"
+                try:
+                    _download(link, dest)
+                except Exception as e:
+                    log.warning("download failed for video %s: %s", video.get("id"), e)
+                    continue
+                used_urls.add(link)
+                picked.append(dest)
+        log.info("Pixabay supplied %d additional clip(s)", len(picked) - before)
+    elif len(picked) < n_clips:
+        log.info("PIXABAY_API_KEY not set — skipping Pixabay")
 
     # --- fill any shortfall from data/assets_local ---
     if len(picked) < n_clips:

@@ -53,8 +53,8 @@ cp .env.example .env
 | Key | Bắt buộc? | Lấy ở đâu |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Không — thiếu thì pipeline chạy ở **manual script mode** | [console.anthropic.com](https://console.anthropic.com/) |
-| `PEXELS_API_KEY` | Không — nguồn B-roll ưu tiên #1; thiếu thì thử `PIXABAY_API_KEY`, rồi mới đến ảnh/video dự phòng trong `data/assets_local/` | Free tại [pexels.com/api](https://www.pexels.com/api/) (đăng ký tài khoản → tạo API key, có quyền thương mại) |
-| `PIXABAY_API_KEY` | Không — nguồn B-roll dự phòng #2, chỉ dùng khi Pexels trống/không đủ kết quả | Free tại [pixabay.com/api/docs](https://pixabay.com/api/docs/) (đăng ký tài khoản → lấy API key, license cho phép dùng thương mại, không cần credit) |
+| `PEXELS_API_KEY` | Không — thiếu thì dùng riêng `PIXABAY_API_KEY` (nếu có), hoặc ảnh/video dự phòng trong `data/assets_local/` | Free tại [pexels.com/api](https://www.pexels.com/api/) (đăng ký tài khoản → tạo API key, có quyền thương mại) |
+| `PIXABAY_API_KEY` | Không — có cả 2 key thì mỗi video chia đều clip từ Pexels + Pixabay (đa dạng hơn), không bắt buộc phải có key này | Free tại [pixabay.com/api/docs](https://pixabay.com/api/docs/) (đăng ký tài khoản → lấy API key, license cho phép dùng thương mại, không cần credit) |
 | `ELEVENLABS_API_KEY` | Không — chỉ dùng khi đổi `voice.provider: elevenlabs` trong config | [elevenlabs.io](https://elevenlabs.io/) |
 
 **Vì sao không lấy ảnh từ Pinterest:** Pinterest không có API để tải ảnh/video của người khác về dùng lại (API của họ chỉ để *đăng* pin lên tài khoản, không phải để *tìm & tải*), và phần lớn nội dung trên đó là người dùng ghim lại từ nơi khác, không rõ bản quyền gốc — dùng để đăng lên kênh kiếm tiền có rủi ro copyright strike thật. Pexels/Pixabay được chọn vì cả hai đều cấp license miễn phí, rõ ràng, dùng thương mại không cần credit.
@@ -209,7 +209,7 @@ của mỗi dòng) để `--resume` biết chính xác job nào cần tiếp t�
 |---|---|---|
 | Script (Anthropic) | Không có `ANTHROPIC_API_KEY` | `single`/`batch`: dừng job, yêu cầu dán script tay. `auto`: tự lấy script viết sẵn từ `data/topic_bank.csv`, không dừng |
 | Giọng đọc (edge-tts) | Lỗi mạng thoáng qua (`NoAudioReceived`, ...) | Tự retry tối đa 3 lần (exponential backoff) |
-| Visual (Pexels → Pixabay) | Không có `PEXELS_API_KEY`/`PIXABAY_API_KEY` hoặc không đủ kết quả | Thử Pexels trước, thiếu thì bù bằng Pixabay, vẫn thiếu thì lấy ngẫu nhiên từ `data/assets_local/videos/`; nếu thư mục đó cũng trống, tự sinh ảnh nền màu trơn bằng ffmpeg — **không bao giờ trả về danh sách rỗng** |
+| Visual (Pexels + Pixabay) | Không có `PEXELS_API_KEY`/`PIXABAY_API_KEY` hoặc không đủ kết quả | Chia đều số clip cần cho mọi nguồn đang có key (vd. 5 clip + cả 2 key → 3 Pexels + 2 Pixabay trong cùng 1 video); nguồn nào thiếu quota thì nguồn còn lại bù; vẫn thiếu thì lấy ngẫu nhiên từ `data/assets_local/videos/`; nếu thư mục đó cũng trống, tự sinh ảnh nền màu trơn bằng ffmpeg — **không bao giờ trả về danh sách rỗng** |
 | Nhạc nền | Luôn tự tổng hợp, không phụ thuộc key/mạng | Xem mục 5.1 |
 
 `data/assets_local/videos/*.mp4` (gradient tối chuyển động chậm + grain/vignette)

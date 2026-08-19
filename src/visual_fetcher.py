@@ -1,8 +1,11 @@
-"""Fetch B-roll for a video: Pexels video search by keyword, then Pixabay as a
-second online source, then a local fallback that guarantees this function
-never returns an empty list — this is the step most likely to fail (no key,
-no results, rate limit), so it must degrade gracefully rather than crash the
-job.
+"""Fetch B-roll for a video: clips are split evenly across every online
+source that has an API key configured (Pexels + Pixabay today), so a single
+video mixes footage from both instead of treating one as a mere fallback for
+the other. If a source comes up short on its quota, the remaining sources are
+asked to cover the gap; if none of them can, a local fallback (then a
+synthesized placeholder) guarantees this function never returns an empty
+list — this is the step most likely to fail (no key, no results, rate
+limit), so it must degrade gracefully rather than crash the job.
 
 Both Pexels and Pixabay are used specifically because their standard license
 grants free commercial use with no attribution required — the same
@@ -145,6 +148,40 @@ def _download(url: str, dest: Path) -> Path:
     return dest
 
 
+def _fetch_from_source(
+    name: str, search_fn, pick_fn, api_key: str, keywords: list[str],
+    min_duration: int, quota: int, clips_dir: Path, used_urls: set[str],
+) -> list[Path]:
+    """Download up to `quota` not-yet-used clips from one source (Pexels or
+    Pixabay), trying each keyword in turn until the quota is met or keywords
+    run out. `used_urls` is shared across sources/calls so the same file
+    link is never downloaded twice."""
+    picked: list[Path] = []
+    for keyword in keywords:
+        if len(picked) >= quota:
+            break
+        try:
+            results = search_fn(keyword, api_key, min_duration)
+        except Exception as e:
+            log.warning("%s search for %r failed: %s", name, keyword, e)
+            continue
+        for video in results:
+            if len(picked) >= quota:
+                break
+            link = pick_fn(video)
+            if not link or link in used_urls:
+                continue
+            dest = clips_dir / f"{name}_{video['id']}.mp4"
+            try:
+                _download(link, dest)
+            except Exception as e:
+                log.warning("download failed for video %s: %s", video.get("id"), e)
+                continue
+            used_urls.add(link)
+            picked.append(dest)
+    return picked
+
+
 def _generate_synthetic_fallback(dest: Path, index: int) -> Path:
     """Last-resort fallback if even the local fallback_dir is empty: a plain
     color still generated on the fly with ffmpeg, so fetch_visuals can never
@@ -173,61 +210,38 @@ def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dic
     used_urls: set[str] = set()
     keywords = _extract_keywords(topic, script, n=n_clips + len(NICHE_KEYWORDS), language=language)
 
+    # Every online source with a configured key contributes to the same
+    # video (not "Pexels unless it comes up short") — quota is split as
+    # evenly as possible up front, then any shortfall from one source is
+    # offered to the others in a second pass, so the n_clips target is still
+    # hit before falling through to local/synthetic fallback.
+    sources = []
     if pexels_key:
-        for keyword in keywords:
-            if len(picked) >= n_clips:
-                break
-            try:
-                results = _search_pexels(keyword, pexels_key, min_duration)
-            except Exception as e:
-                log.warning("Pexels search for %r failed: %s", keyword, e)
-                continue
-            for video in results:
-                if len(picked) >= n_clips:
-                    break
-                link = _pick_video_file(video)
-                if not link or link in used_urls:
-                    continue
-                dest = clips_dir / f"pexels_{len(picked)}_{video['id']}.mp4"
-                try:
-                    _download(link, dest)
-                except Exception as e:
-                    log.warning("download failed for video %s: %s", video.get("id"), e)
-                    continue
-                used_urls.add(link)
-                picked.append(dest)
-        log.info("Pexels supplied %d/%d clip(s)", len(picked), n_clips)
+        sources.append(("pexels", _search_pexels, _pick_video_file, pexels_key))
     else:
         log.info("PEXELS_API_KEY not set — skipping Pexels")
+    if pixabay_key:
+        sources.append(("pixabay", _search_pixabay, _pick_pixabay_video_file, pixabay_key))
+    else:
+        log.info("PIXABAY_API_KEY not set — skipping Pixabay")
 
-    # --- second online source: Pixabay (same free-commercial-use license as Pexels) ---
-    if len(picked) < n_clips and pixabay_key:
-        before = len(picked)
-        for keyword in keywords:
+    if sources:
+        base_quota = n_clips // len(sources)
+        remainder = n_clips % len(sources)
+        for i, (name, search_fn, pick_fn, api_key) in enumerate(sources):
+            quota = base_quota + (1 if i < remainder else 0)
+            got = _fetch_from_source(name, search_fn, pick_fn, api_key, keywords, min_duration, quota, clips_dir, used_urls)
+            picked.extend(got)
+            log.info("%s supplied %d/%d clip(s) (quota %d)", name, len(got), n_clips, quota)
+
+        # second pass: let other sources cover any shortfall so quotas add up to n_clips
+        for name, search_fn, pick_fn, api_key in sources:
             if len(picked) >= n_clips:
                 break
-            try:
-                results = _search_pixabay(keyword, pixabay_key, min_duration)
-            except Exception as e:
-                log.warning("Pixabay search for %r failed: %s", keyword, e)
-                continue
-            for video in results:
-                if len(picked) >= n_clips:
-                    break
-                link = _pick_pixabay_video_file(video)
-                if not link or link in used_urls:
-                    continue
-                dest = clips_dir / f"pixabay_{len(picked)}_{video['id']}.mp4"
-                try:
-                    _download(link, dest)
-                except Exception as e:
-                    log.warning("download failed for video %s: %s", video.get("id"), e)
-                    continue
-                used_urls.add(link)
-                picked.append(dest)
-        log.info("Pixabay supplied %d additional clip(s)", len(picked) - before)
-    elif len(picked) < n_clips:
-        log.info("PIXABAY_API_KEY not set — skipping Pixabay")
+            got = _fetch_from_source(name, search_fn, pick_fn, api_key, keywords, min_duration, n_clips - len(picked), clips_dir, used_urls)
+            if got:
+                picked.extend(got)
+                log.info("%s covered %d additional clip(s) from another source's shortfall", name, len(got))
 
     # --- fill any shortfall from data/assets_local ---
     if len(picked) < n_clips:

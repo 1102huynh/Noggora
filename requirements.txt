@@ -1,0 +1,7 @@
+edge-tts>=6.1
+requests
+pyyaml
+pysubs2
+python-dotenv
+anthropic
+tenacity

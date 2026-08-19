@@ -1,0 +1,41 @@
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  max_duration_sec: 45
+  min_duration_sec: 25
+
+voice:
+  provider: edge_tts            # edge_tts | elevenlabs
+  edge_voice_en: en-US-AriaNeural
+  edge_voice_vi: vi-VN-HoaiMyNeural
+  rate: "+0%"
+
+subtitle:
+  font: "Montserrat-Bold"
+  font_size: 72
+  color: "&H00FFFFFF"           # trắng, định dạng ASS
+  outline_color: "&H00000000"
+  position: "bottom_center"     # bottom_center | middle_center
+  # % chiều cao video chừa trống phía dưới cho phụ đề (bottom_center) — phải
+  # đủ lớn để không bị đè bởi UI nền tảng (tên kênh/tiêu đề/nút tương tác của
+  # YouTube Shorts, TikTok, Reels đều tự vẽ đè lên khoảng dưới cùng video).
+  safe_margin_percent: 28
+
+visuals:
+  clips_per_video: 5
+  min_clip_sec: 6
+  source: pexels                # pexels | local
+  fallback_dir: data/assets_local
+
+music:
+  dir: data/assets_local/music
+  volume_db: -22
+
+branding:
+  channel_name: "Noggora"
+  watermark: false               # true nếu muốn overlay logo góc màn hình
+
+script:
+  anthropic_model: "claude-sonnet-5"   # override here if you want a cheaper/older model
+  max_words: 110

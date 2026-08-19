@@ -3,15 +3,16 @@ data/topic_bank.csv, so `main.py auto` needs zero arguments and never needs
 ANTHROPIC_API_KEY to run.
 
 Also owns the monthly refresh: `ensure_fresh_batch()` tops up the bank with a
-new batch of topics once the current one is used up or 30 days have passed —
-via the Anthropic API if ANTHROPIC_API_KEY is set (best quality), otherwise
-via a template generator over data/effects_pool.csv (~60 named psychology
-effects), so topics never repeat across days and the bank never needs a
-human/API to keep going for months.
+new batch of topics once the current one is used up or a calendar month has
+passed — via the Anthropic API if ANTHROPIC_API_KEY is set (best quality),
+otherwise via a template generator over data/effects_pool.csv (~60 named
+psychology effects), so topics never repeat across days and the bank never
+needs a human/API to keep going for months.
 """
 
 from __future__ import annotations
 
+import calendar
 import csv
 import json
 import os
@@ -28,8 +29,13 @@ DEFAULT_BANK_PATH = Path("data/topic_bank.csv")
 DEFAULT_EFFECTS_POOL_PATH = Path("data/effects_pool.csv")
 DEFAULT_META_PATH = Path("data/topic_bank_meta.json")
 
-BATCH_SIZE = 30
-BATCH_INTERVAL_DAYS = 30
+
+def _days_in_month(dt: datetime) -> int:
+    """28/29/30/31 depending on dt's actual month — used instead of a flat
+    "30 days" constant so a batch generated in February isn't short by 2-3
+    videos, and one generated in a 31-day month doesn't wait an extra day
+    past when it should have refreshed."""
+    return calendar.monthrange(dt.year, dt.month)[1]
 
 _BANK_FIELDNAMES = ["id", "topic", "language", "script", "used_at"]
 _EFFECTS_FIELDNAMES = ["id", "name", "mechanism", "example", "hook_subject", "topic", "used_batch"]
@@ -234,32 +240,43 @@ def ensure_fresh_batch(
     bank_path: Path = DEFAULT_BANK_PATH,
     effects_pool_path: Path = DEFAULT_EFFECTS_POOL_PATH,
     meta_path: Path = DEFAULT_META_PATH,
-    batch_size: int = BATCH_SIZE,
-    interval_days: int = BATCH_INTERVAL_DAYS,
+    batch_size: int | None = None,
+    interval_days: int | None = None,
     model: str = "claude-sonnet-5",
 ) -> None:
     """Call before pick_next(). Appends a fresh batch of topics to bank_path
     once the current batch is used up OR interval_days have passed since it
     started, whichever comes first — so topics are guaranteed not to repeat
     within a month even if the bank isn't literally exhausted yet.
+
+    `batch_size`/`interval_days` default to None, which means "derive from
+    the calendar" rather than a flat 30: interval_days becomes the actual
+    number of days in the month the current batch started in (28-31), and a
+    newly generated batch is sized to the number of days in the month it
+    starts in — so at one video/day, a batch generated in February is 28
+    topics (not 30, which would run 2 days short) and one generated in a
+    31-day month is 31 (not 30, which would refresh a day early).
     """
     meta = _load_or_init_meta(meta_path)
     started = datetime.fromisoformat(meta["batch_started_at"])
-    days_elapsed = (datetime.now(timezone.utc) - started).days
+    now = datetime.now(timezone.utc)
+    days_elapsed = (now - started).days
+    effective_interval_days = interval_days if interval_days is not None else _days_in_month(started)
 
     rows = _read_rows(bank_path) if bank_path.exists() else []
     unused_count = sum(1 for r in rows if not r.get("used_at"))
 
-    if unused_count > 0 and days_elapsed < interval_days:
+    if unused_count > 0 and days_elapsed < effective_interval_days:
         return  # current batch still has unused topics and isn't stale yet
 
+    effective_batch_size = batch_size if batch_size is not None else _days_in_month(now)
     next_batch = meta["current_batch"] + 1
     existing_topics = {r["topic"] for r in rows}
 
-    new_entries = _generate_batch_via_api(batch_size, model, existing_topics)
+    new_entries = _generate_batch_via_api(effective_batch_size, model, existing_topics)
     source = "Anthropic API"
     if new_entries is None:
-        new_entries = _generate_batch_template(batch_size, effects_pool_path, next_batch)
+        new_entries = _generate_batch_template(effective_batch_size, effects_pool_path, next_batch)
         source = "template generator (data/effects_pool.csv)"
 
     if not new_entries:
@@ -276,7 +293,7 @@ def ensure_fresh_batch(
     _write_rows(bank_path, rows)
 
     meta["current_batch"] = next_batch
-    meta["batch_started_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    meta["batch_started_at"] = now.isoformat(timespec="seconds")
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     log.info("appended batch #%d: %d new topics via %s", next_batch, len(new_entries), source)
 

@@ -92,20 +92,26 @@ thêm chủ đề mới vào file CSV).
 - Thêm chủ đề mới vào bank: mở `data/topic_bank.csv`, thêm dòng mới với cột
   `used_at` để trống (id chỉ cần là số chưa dùng).
 
-### 2.1 Không lặp lại chủ đề — tự tạo lô mới mỗi ~30 ngày
+### 2.1 Không lặp lại chủ đề — tự tạo lô mới mỗi tháng, đúng theo số ngày thật
 
 - **Chủ đề đã dùng thì không bao giờ được chọn lại**, cho tới khi lô hiện tại
   hết sạch. `used_at` trong `data/topic_bank.csv` đánh dấu điều đó — `auto`
   không bao giờ chọn lại 1 dòng đã có `used_at`.
 - Trước mỗi lần chạy, `auto` tự kiểm tra (`topic_bank.ensure_fresh_batch`,
   theo dõi qua `data/topic_bank_meta.json`): nếu lô hiện tại **hết chủ đề**
-  HOẶC đã **quá 30 ngày** kể từ lần tạo lô gần nhất (tuỳ điều kiện nào đến
-  trước) → tự thêm 1 lô 30 chủ đề mới vào cuối `topic_bank.csv`, không cần
-  bạn làm gì.
+  HOẶC đã **quá số ngày của tháng lúc lô đó bắt đầu** (28/29/30/31 ngày —
+  tính bằng `calendar.monthrange`, không còn cứng "30 ngày" nữa) kể từ lần
+  tạo lô gần nhất (tuỳ điều kiện nào đến trước) → tự thêm 1 lô chủ đề mới vào
+  cuối `topic_bank.csv`, không cần bạn làm gì.
+- **Số chủ đề mỗi lô = số ngày của tháng lúc lô đó được tạo** (vd. lô tạo
+  trong tháng 2 → 28 hoặc 29 chủ đề; tháng có 31 ngày → 31 chủ đề), thay vì
+  cố định 30 như trước — để đúng 1 video/ngày không bị thiếu (tháng 2 dùng
+  hết 30 sẽ thiếu ~2 ngày) hay dư (tháng 31 ngày dùng 30 sẽ refresh sớm 1
+  ngày dù vẫn còn topic cũ).
 - Lô mới lấy từ đâu:
-  - **Có `ANTHROPIC_API_KEY`:** gọi Anthropic 1 lần, xin 30 chủ đề+script
-    hoàn toàn mới (kèm danh sách chủ đề đã dùng để tránh trùng) — chất lượng
-    cao nhất.
+  - **Có `ANTHROPIC_API_KEY`:** gọi Anthropic 1 lần, xin đủ số chủ đề+script
+    theo đúng số ngày của tháng đó, hoàn toàn mới (kèm danh sách chủ đề đã
+    dùng để tránh trùng) — chất lượng cao nhất.
   - **Không có key (mặc định hiện tại):** tự ghép từ
     [data/effects_pool.csv](data/effects_pool.csv) — kho ~60 hiệu ứng tâm lý
     học có sẵn (tên + cơ chế + ví dụ) chưa dùng ở lô hand-written đầu tiên,

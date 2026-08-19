@@ -6,8 +6,11 @@ Reels — script → giọng đọc AI → phụ đề burn-in → hình nền/B
 ghép video.
 
 Kênh: **Noggora** — niche tâm lý học/hành vi con người, video 30–45s, faceless,
-hook 3 giây đầu. Hỗ trợ song song tiếng Anh (kênh chính) và tiếng Việt (kênh
-phụ) bằng cách đổi `--lang` + voice trong config.
+hook 3 giây đầu. Pipeline hỗ trợ cả tiếng Anh và tiếng Việt (đổi `--lang` +
+voice trong config), nhưng hiện tại kênh **chỉ đăng tiếng Anh** — vì vậy
+`data/topic_bank.csv` (nguồn của `auto`) chỉ chứa chủ đề tiếng Anh; muốn làm
+video tiếng Việt vẫn dùng được `single --topic "..." --lang vi`, chỉ là chưa
+có sẵn chủ đề nào trong bank.
 
 Xem [PLAN-automation-noggora.md](PLAN-automation-noggora.md) cho spec kỹ thuật
 đầy đủ đã dùng để build pipeline này.
@@ -74,16 +77,18 @@ python main.py auto
 ```
 
 Lệnh này tự lấy **chủ đề + script kế tiếp chưa dùng** từ
-[data/topic_bank.csv](data/topic_bank.csv) (35 chủ đề tâm lý học đã viết sẵn
-script, 25 EN + 10 VI, xáo trộn thứ tự sẵn) và chạy hết pipeline ra
-`final.mp4`. Chạy lại lần sau sẽ tự lấy chủ đề *khác*, không lặp, cho đến khi
-dùng hết cả 35 thì tự quay vòng lại từ đầu (có log cảnh báo để bạn biết lúc đó
-nên bổ sung thêm chủ đề mới vào file CSV).
+[data/topic_bank.csv](data/topic_bank.csv) (25 chủ đề tâm lý học tiếng Anh đã
+viết sẵn script, xáo trộn thứ tự sẵn) và chạy hết pipeline ra `final.mp4`.
+Chạy lại lần sau sẽ tự lấy chủ đề *khác*, không lặp, cho đến khi dùng hết cả
+25 thì tự quay vòng lại từ đầu (có log cảnh báo để bạn biết lúc đó nên bổ sung
+thêm chủ đề mới vào file CSV).
 
 - Nếu bạn **có** `ANTHROPIC_API_KEY` trong `.env`: `auto` vẫn lấy chủ đề từ
   bank, nhưng để Anthropic sinh script mới thay vì dùng script viết sẵn —
   chất lượng/đa dạng cao hơn.
-- Muốn giới hạn 1 ngôn ngữ: `python main.py auto --lang en` (hoặc `--lang vi`).
+- `data/topic_bank.csv` hiện chỉ có chủ đề tiếng Anh (kênh chưa đăng tiếng
+  Việt) nên `--lang vi` sẽ không tìm thấy gì để chọn; muốn video tiếng Việt,
+  dùng `single --topic "..." --lang vi` (mục 3) thay vì `auto`.
 - Thêm chủ đề mới vào bank: mở `data/topic_bank.csv`, thêm dòng mới với cột
   `used_at` để trống (id chỉ cần là số chưa dùng).
 
@@ -107,15 +112,17 @@ nên bổ sung thêm chủ đề mới vào file CSV).
     ghép qua vài mẫu câu (hook/giải thích/hành động) thành script hoàn chỉnh.
     Văn phong sẽ khuôn mẫu hơn 25 script tôi viết tay ban đầu, nhưng vẫn đúng
     cấu trúc hook→insight→hành động, đủ dùng để đăng.
-- 35 chủ đề viết tay (lô 1) + 60 hiệu ứng trong effects_pool.csv (đủ cho ~2
-  lô nữa, tiếng Anh) cho khoảng **3 tháng** không lặp, không cần đụng gì cả.
-  Sau đó, nếu vẫn chưa có `ANTHROPIC_API_KEY`, cần bổ sung thêm dòng vào
-  `effects_pool.csv` (hoặc nhờ tôi viết thêm) — nếu không, hệ thống sẽ quay
-  vòng lại từ đầu (có log cảnh báo rõ ràng khi việc này xảy ra) thay vì dừng
-  hẳn.
+- 25 chủ đề viết tay (lô 1, tiếng Anh) + 60 hiệu ứng trong effects_pool.csv
+  (đủ cho ~2 lô nữa, cũng tiếng Anh) cho khoảng **3 tháng** không lặp, không
+  cần đụng gì cả. Sau đó, nếu vẫn chưa có `ANTHROPIC_API_KEY`, cần bổ sung
+  thêm dòng vào `effects_pool.csv` (hoặc nhờ tôi viết thêm) — nếu không, hệ
+  thống sẽ quay vòng lại từ đầu (có log cảnh báo rõ ràng khi việc này xảy ra)
+  thay vì dừng hẳn.
 - **Giới hạn hiện tại:** kho tự sinh theo template (`effects_pool.csv`) chỉ
-  hỗ trợ tiếng Anh. Các lô tiếng Việt mới sau lô 1 (10 chủ đề viết tay) cần
-  `ANTHROPIC_API_KEY`, hoặc nhờ tôi viết thêm thủ công.
+  hỗ trợ tiếng Anh, và `data/topic_bank.csv` hiện không còn chủ đề tiếng Việt
+  nào (đã gỡ bỏ vì kênh chưa đăng tiếng Việt). Muốn có lại chủ đề tiếng Việt
+  trong bank, cần `ANTHROPIC_API_KEY` (batch tự sinh chỉ tạo tiếng Anh, phải
+  gọi thủ công theo hướng khác) hoặc nhờ tôi viết tay bổ sung.
 
 ### 2.2 Tự động chạy mỗi ngày, không cần bấm gì (Windows Task Scheduler)
 

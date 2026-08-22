@@ -65,6 +65,32 @@ cp .env.example .env
 Không key nào là bắt buộc để chạy thử pipeline lần đầu — mọi bước đều có
 fallback (xem mục 5).
 
+### 1.4 Chuyển / cài lại trên một máy Windows khác
+
+Lặp lại toàn bộ mục 1.1–1.3 trên máy mới (venv không copy được giữa các máy —
+phải `python -m venv .venv` lại từ đầu). Ngoài ra, **3 thứ sau đây bị
+`.gitignore` nên `git clone` (hoặc copy code qua Git) sẽ KHÔNG mang theo** —
+phải tự chép tay từ máy cũ sang (USB/OneDrive/zip...), nếu không `auto` sẽ
+chạy được nhưng thiếu dữ liệu/tiến độ:
+
+| Thư mục/file | Vì sao quan trọng nếu thiếu |
+|---|---|
+| `data/` (cả thư mục) | Chứa `topic_bank.csv` (25 chủ đề viết tay + trạng thái `used_at`), `effects_pool.csv`, `topics.csv`, `topic_bank_meta.json` và `assets_local/` (video nền placeholder). Thiếu thư mục này, `auto` không có chủ đề nào để chọn và sẽ lỗi ngay từ lần chạy đầu trên máy mới |
+| `.env` | Chứa toàn bộ API key — không copy thì `auto`/`single` vẫn chạy được (nhờ fallback ở mục 5) nhưng chất lượng thấp hơn (manual script, không B-roll thật) |
+
+Nếu **không** copy `data/topic_bank_meta.json` + `used_at` trong
+`topic_bank.csv`, máy mới sẽ coi như chưa video nào được đăng và có thể chọn
+lại đúng những chủ đề máy cũ đã dùng — không sai kỹ thuật, chỉ là dễ trùng nội
+dung giữa 2 máy nếu cả hai cùng chạy `auto`.
+
+`output/` và `logs/` không cần copy — pipeline tự tạo lại, chỉ mất lịch sử
+video/log cũ (không ảnh hưởng chức năng).
+
+Nếu muốn máy mới **tự chạy mỗi ngày** (mục 2.2), Task Scheduler là cấu hình
+riêng theo từng máy — phải chạy lại
+`powershell -ExecutionPolicy Bypass -File setup_scheduled_task.ps1` trên máy
+mới, không có cách "copy" scheduled task từ máy cũ sang.
+
 ---
 
 ## 2. Chế độ tự động (zero-argument, mỗi ngày 1 clip khác nhau)

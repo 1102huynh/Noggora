@@ -34,18 +34,29 @@ def _format_srt_timestamp(td: timedelta) -> str:
 def _group_word_boundaries_to_srt(cues: list, words_per_caption: int = WORDS_PER_CAPTION) -> str:
     """Group per-word (offset, duration, text) cues into short caption lines and
     render as SRT text. `cues` items are edge_tts.SubMaker.cues (Subtitle objects
-    with .start, .end (timedelta) and .content (str))."""
+    with .start, .end (timedelta) and .content (str)).
+
+    Each group is revealed word-by-word rather than appearing all at once: the
+    first word of a group shows only once it's actually spoken, the second word
+    is appended once *it's* spoken, and so on. Without this, a whole 4-word line
+    (e.g. "One small slightly vulnerable") would flash onto screen the instant
+    the first word starts — reading well ahead of the voiceover for however long
+    the rest of the group takes to speak.
+    """
     lines = []
     index = 1
     for i in range(0, len(cues), words_per_caption):
         group = cues[i : i + words_per_caption]
-        start = group[0].start
-        end = group[-1].end
-        text = " ".join(c.content for c in group)
-        lines.append(
-            f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
-        )
-        index += 1
+        for j in range(len(group)):
+            text = " ".join(c.content for c in group[: j + 1])
+            start = group[j].start
+            # Hold this partial line until the next word starts (or, for the
+            # group's last word, until it finishes) so it doesn't blink.
+            end = group[j + 1].start if j + 1 < len(group) else group[j].end
+            lines.append(
+                f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
+            )
+            index += 1
     return "\n".join(lines)
 
 
@@ -106,7 +117,8 @@ async def generate_voice(
             last_cue_end, duration,
         )
 
-    log.info("voice generated: %s (%.1fs), %s (%d captions)", mp3_path, duration, srt_path, len(submaker.cues) // WORDS_PER_CAPTION + 1)
+    num_groups = (len(submaker.cues) + WORDS_PER_CAPTION - 1) // WORDS_PER_CAPTION
+    log.info("voice generated: %s (%.1fs), %s (%d caption lines, %d words)", mp3_path, duration, srt_path, num_groups, len(submaker.cues))
     return mp3_path, srt_path
 
 

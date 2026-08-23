@@ -28,6 +28,7 @@ log = get_logger("topic_bank")
 DEFAULT_BANK_PATH = Path("data/topic_bank.csv")
 DEFAULT_EFFECTS_POOL_PATH = Path("data/effects_pool.csv")
 DEFAULT_META_PATH = Path("data/topic_bank_meta.json")
+DEFAULT_USED_PATH = Path("data/topic_bank_used.csv")
 
 
 def _days_in_month(dt: datetime) -> int:
@@ -84,14 +85,57 @@ def _write_rows(bank_path: Path, rows: list[dict]) -> None:
             writer.writerow({k: row.get(k, "") for k in _BANK_FIELDNAMES})
 
 
-def pick_next(bank_path: Path = DEFAULT_BANK_PATH, language: str | None = None) -> dict:
+def _append_used_rows(used_path: Path, rows: list[dict]) -> None:
+    """Append already-used rows to the archive, creating it with a header
+    if it doesn't exist yet. Kept separate from the active bank so
+    _generate_batch_via_api can still exclude every topic ever posted, and
+    so pick_next() has something to recycle from as a last resort."""
+    file_exists = used_path.exists()
+    used_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(used_path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_BANK_FIELDNAMES)
+        if not file_exists:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in _BANK_FIELDNAMES})
+
+
+def _recycle_from_used(bank_path: Path, used_path: Path, language: str | None) -> int:
+    """Last resort when the active bank has nothing left to post and a fresh
+    batch couldn't be generated: copy previously-used topics back into the
+    active bank (used_at cleared) rather than hard-failing. Returns how many
+    rows were recycled. Recycled rows are left in the archive too, so a topic
+    can be recycled more than once if this keeps happening."""
+    if not used_path.exists():
+        return 0
+    used_rows = _read_rows(used_path)
+    matching = [r for r in used_rows if language is None or r["language"] == language]
+    if not matching:
+        return 0
+    log.warning(
+        "topic bank exhausted%s and no fresh batch could be generated — "
+        "recycling %d previously-used topic(s) from %s",
+        f" for language={language}" if language else "", len(matching), used_path,
+    )
+    bank_rows = _read_rows(bank_path) if bank_path.exists() else []
+    for row in matching:
+        recycled = dict(row)
+        recycled["used_at"] = ""
+        bank_rows.append(recycled)
+    _write_rows(bank_path, bank_rows)
+    return len(matching)
+
+
+def pick_next(
+    bank_path: Path = DEFAULT_BANK_PATH, language: str | None = None, used_path: Path = DEFAULT_USED_PATH
+) -> dict:
     """Return the next unused entry (id/topic/language/script), in bank order.
 
     Call ensure_fresh_batch() first (main.py's `auto` command does) so this
     normally always finds something new. As a last-resort fallback — only
-    reached if batch generation itself failed — the whole bank (or matching
-    language slice) is recycled with a warning, so this still never raises
-    "nothing left to post".
+    reached if batch generation itself failed — previously-used topics are
+    recycled back in from used_path, so this still never raises "nothing
+    left to post" as long as the bank has ever had anything in it.
     """
     if not bank_path.exists():
         raise FileNotFoundError(
@@ -99,36 +143,40 @@ def pick_next(bank_path: Path = DEFAULT_BANK_PATH, language: str | None = None) 
             "the `auto` command draws from."
         )
     rows = _read_rows(bank_path)
-    if not rows:
-        raise ValueError(f"{bank_path} is empty — add at least one topic row to use `auto`.")
 
     def matches(row: dict) -> bool:
         return not row.get("used_at") and (language is None or row["language"] == language)
 
     candidates = [r for r in rows if matches(r)]
-    if not candidates:
-        log.warning(
-            "topic bank exhausted%s and no fresh batch could be generated — recycling from the top",
-            f" for language={language}" if language else "",
-        )
-        for row in rows:
-            if language is None or row["language"] == language:
-                row["used_at"] = ""
-        _write_rows(bank_path, rows)
+    if not candidates and _recycle_from_used(bank_path, used_path, language):
+        rows = _read_rows(bank_path)
         candidates = [r for r in rows if matches(r)]
     if not candidates:
-        raise ValueError(f"No entries in {bank_path} match language={language!r}.")
+        raise ValueError(
+            f"No usable entries in {bank_path} (or {used_path} to recycle from) "
+            f"for language={language!r}."
+        )
 
     return candidates[0]
 
 
-def mark_used(bank_path: Path, entry_id: str) -> None:
+def mark_used(bank_path: Path, entry_id: str, used_path: Path = DEFAULT_USED_PATH) -> None:
+    """Remove the entry from the active bank (so topic_bank.csv only ever
+    holds topics still to be posted) and append it, stamped with used_at,
+    to used_path."""
     rows = _read_rows(bank_path)
+    remaining = []
+    used_row = None
     for row in rows:
-        if row["id"] == str(entry_id):
+        if row["id"] == str(entry_id) and used_row is None:
             row["used_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            break
-    _write_rows(bank_path, rows)
+            used_row = row
+        else:
+            remaining.append(row)
+    if used_row is None:
+        return
+    _write_rows(bank_path, remaining)
+    _append_used_rows(used_path, [used_row])
 
 
 # --- monthly batch refresh --------------------------------------------------
@@ -240,6 +288,7 @@ def ensure_fresh_batch(
     bank_path: Path = DEFAULT_BANK_PATH,
     effects_pool_path: Path = DEFAULT_EFFECTS_POOL_PATH,
     meta_path: Path = DEFAULT_META_PATH,
+    used_path: Path = DEFAULT_USED_PATH,
     batch_size: int | None = None,
     interval_days: int | None = None,
     model: str = "claude-sonnet-5",
@@ -264,6 +313,7 @@ def ensure_fresh_batch(
     effective_interval_days = interval_days if interval_days is not None else _days_in_month(started)
 
     rows = _read_rows(bank_path) if bank_path.exists() else []
+    used_rows = _read_rows(used_path) if used_path.exists() else []
     unused_count = sum(1 for r in rows if not r.get("used_at"))
 
     if unused_count > 0 and days_elapsed < effective_interval_days:
@@ -271,7 +321,9 @@ def ensure_fresh_batch(
 
     effective_batch_size = batch_size if batch_size is not None else _days_in_month(now)
     next_batch = meta["current_batch"] + 1
-    existing_topics = {r["topic"] for r in rows}
+    # Used topics are removed from `rows` (mark_used moves them to used_path),
+    # so both need checking here or the API could regenerate an already-posted topic.
+    existing_topics = {r["topic"] for r in rows} | {r["topic"] for r in used_rows}
 
     new_entries = _generate_batch_via_api(effective_batch_size, model, existing_topics)
     source = "Anthropic API"
@@ -283,7 +335,7 @@ def ensure_fresh_batch(
         log.warning("could not generate a new topic batch via %s — will fall back to recycling if needed", source)
         return
 
-    next_id = max((int(r["id"]) for r in rows), default=0) + 1
+    next_id = max([int(r["id"]) for r in rows] + [int(r["id"]) for r in used_rows], default=0) + 1
     for entry in new_entries:
         rows.append({
             "id": str(next_id), "topic": entry["topic"], "language": entry["language"],

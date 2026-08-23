@@ -5,3 +5,4 @@ pysubs2
 python-dotenv
 anthropic
 tenacity
+flask

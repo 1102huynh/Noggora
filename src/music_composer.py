@@ -29,7 +29,7 @@ _MOODS: dict[str, dict] = {
     # "why does X happen" open curiosity, paradoxes
     "curious":    {"chord": (146.83, 220.00, 293.66), "tremolo": 0.15, "lowpass": 3000, "echo_ms": 100, "echo_decay": 0.30},
     # trust, connection, actionable hope
-    "warm":       {"chord": (130.81, 164.81, 196.00), "tremolo": 0.08, "lowpass": 2500, "echo_ms": 120, "echo_decay": 0.35},
+    "warm":       {"chord": (130.81, 164.81, 196.00), "tremolo": 0.10, "lowpass": 2500, "echo_ms": 120, "echo_decay": 0.35},
     # light/quirky (furniture, coffee spills, games)
     "playful":    {"chord": (196.00, 246.94, 293.66), "tremolo": 0.28, "lowpass": 3200, "echo_ms": 70, "echo_decay": 0.25},
 }
@@ -57,14 +57,22 @@ def pick_mood(topic: str, script: str) -> str:
 
 
 def _synthesize_mood_track(mood: str, out_path: Path, duration: int = 40) -> Path:
+    """The oscillator mix + lowpass/aecho chain lose a lot of loudness on
+    their own (measured ~-56dB mean on the old 0.10/0.07/0.07 gains) — quiet
+    enough that after video_assembler's own volume_db attenuation on top,
+    the track was effectively inaudible under the voice track. Louder base
+    gains + a final loudnorm pass gets every mood to a consistent, actually
+    audible loudness so volume_db in settings.yaml behaves as documented
+    (dB *below* a normally-loud track, not below near-silence)."""
     params = _MOODS[mood]
     r, t3, t5 = params["chord"]
     filter_complex = (
-        f"[0:a]volume=0.10[a0];[1:a]volume=0.07[a1];[2:a]volume=0.07[a2];"
+        f"[0:a]volume=0.35[a0];[1:a]volume=0.22[a1];[2:a]volume=0.22[a2];"
         f"[a0][a1][a2]amix=inputs=3:duration=longest,"
         f"tremolo=f={params['tremolo']}:d=0.3,"
         f"lowpass=f={params['lowpass']},"
-        f"aecho=0.6:0.6:{params['echo_ms']}:{params['echo_decay']}[out]"
+        f"aecho=0.6:0.6:{params['echo_ms']}:{params['echo_decay']},"
+        f"loudnorm=I=-16:TP=-1.5:LRA=11[out]"
     )
     args = [
         "ffmpeg", "-y",

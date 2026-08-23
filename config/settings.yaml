@@ -2,14 +2,17 @@ video:
   width: 1080
   height: 1920
   fps: 30
-  max_duration_sec: 45
-  min_duration_sec: 25
+  max_duration_sec: 40
+  min_duration_sec: 30
 
 voice:
   provider: edge_tts            # edge_tts | elevenlabs
   edge_voice_en: en-US-AriaNeural
-  edge_voice_vi: vi-VN-HoaiMyNeural
-  rate: "+0%"
+  edge_voice_vi: vi-VN-NamMinhNeural   # giọng nam tiếng Việt duy nhất của edge-tts
+  rate: "+0%"                          # tốc độ mặc định (áp dụng khi không có rate_<lang>)
+  pitch: "+0Hz"                        # cao độ mặc định (áp dụng khi không có pitch_<lang>)
+  rate_vi: "+8%"                       # hơi nhanh hơn bình thường -> "tươi"
+  pitch_vi: "-12Hz"                    # hạ cao độ -> "trầm"
 
 subtitle:
   font: "Montserrat-Bold"
@@ -23,19 +26,21 @@ subtitle:
   safe_margin_percent: 28
 
 visuals:
-  clips_per_video: 5
+  clips_per_video: 8
   min_clip_sec: 6
   source: pexels                # pexels | local
   fallback_dir: data/assets_local
 
 music:
   dir: data/assets_local/music
-  volume_db: -22
+  volume_db: -24                # nhạc nền đã chuẩn hóa loudness (~-15dB); -24dB cho nó nhỏ, chỉ làm nền dưới giọng đọc
 
 branding:
   channel_name: "Noggora"
   watermark: false               # true nếu muốn overlay logo góc màn hình
 
 script:
-  anthropic_model: "claude-sonnet-5"   # override here if you want a cheaper/older model
-  max_words: 110
+  provider: auto                        # auto | anthropic | groq — auto picks anthropic if ANTHROPIC_API_KEY is set, else groq if GROQ_API_KEY is set
+  anthropic_model: "claude-sonnet-5"    # paid — override here if you want a cheaper/older model
+  groq_model: "openai/gpt-oss-120b"     # free (console.groq.com) — override here for a different Groq-hosted model
+  max_words: 165

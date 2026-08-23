@@ -81,7 +81,8 @@ def cmd_single(args: argparse.Namespace, cfg: dict) -> int:
         log.error("--topic is required (or point --resume at a job dir with a job_log.json)")
         return 1
 
-    result = run_job(topic, language, cfg, out_dir=out_dir)
+    visual_keywords = [k.strip() for k in args.keywords.split(",") if k.strip()] if args.keywords else None
+    result = run_job(topic, language, cfg, out_dir=out_dir, visual_keywords=visual_keywords)
     _print_result(1, 1, topic, result)
     return 0 if result.status == "done" else 1
 
@@ -153,6 +154,7 @@ def main() -> int:
     p_single.add_argument("--topic", help="Topic string (required unless --resume points at a job with a job_log.json)")
     p_single.add_argument("--lang", default="en", choices=["en", "vi"])
     p_single.add_argument("--resume", metavar="OUT_DIR", help="Resume a job stuck at awaiting_manual_script")
+    p_single.add_argument("--keywords", help="Comma-separated English B-roll search terms, overriding topic/script keyword extraction (use for topics outside the psychology niche, e.g. Vietnamese topics)")
 
     p_batch = sub.add_parser("batch", help="Generate videos for pending topics in a CSV")
     p_batch.add_argument("--file", default="data/topics.csv")

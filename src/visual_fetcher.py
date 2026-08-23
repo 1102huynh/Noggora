@@ -195,9 +195,18 @@ def _generate_synthetic_fallback(dest: Path, index: int) -> Path:
     return dest
 
 
-def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dict, language: str = "en") -> list[Path]:
+def fetch_visuals(
+    topic: str, script: str, out_dir: Path, n_clips: int, cfg: dict,
+    language: str = "en", keywords_override: list[str] | None = None,
+) -> list[Path]:
     """Return exactly n_clips local file paths (video or image) to use as
     background visuals, in the order they should appear in the final video.
+
+    `keywords_override` bypasses topic/script keyword extraction and the
+    psychology-niche fallback pool entirely — needed for one-off videos
+    outside the channel's usual niche (e.g. a Vietnamese topic with no
+    English content words to extract), where NICHE_KEYWORDS would otherwise
+    silently pull unrelated stock footage.
     """
     clips_dir = out_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -208,7 +217,10 @@ def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dic
 
     picked: list[Path] = []
     used_urls: set[str] = set()
-    keywords = _extract_keywords(topic, script, n=n_clips + len(NICHE_KEYWORDS), language=language)
+    if keywords_override:
+        keywords = keywords_override
+    else:
+        keywords = _extract_keywords(topic, script, n=n_clips + len(NICHE_KEYWORDS), language=language)
 
     # Every online source with a configured key contributes to the same
     # video (not "Pexels unless it comes up short") — quota is split as

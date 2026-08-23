@@ -55,7 +55,8 @@ cp .env.example .env
 
 | Key | Bắt buộc? | Lấy ở đâu |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Không — thiếu thì pipeline chạy ở **manual script mode** | [console.anthropic.com](https://console.anthropic.com/) |
+| `ANTHROPIC_API_KEY` | Không, **trả phí** — thiếu thì thử `GROQ_API_KEY`, rồi mới tới **manual script mode** | [console.anthropic.com](https://console.anthropic.com/) |
+| `GROQ_API_KEY` | Không, **miễn phí** — dùng để tự sinh script khi không có `ANTHROPIC_API_KEY` (model mặc định: Llama 3.3 70B) | Free tại [console.groq.com](https://console.groq.com/) |
 | `PEXELS_API_KEY` | Không — thiếu thì dùng riêng `PIXABAY_API_KEY` (nếu có), hoặc ảnh/video dự phòng trong `data/assets_local/` | Free tại [pexels.com/api](https://www.pexels.com/api/) (đăng ký tài khoản → tạo API key, có quyền thương mại) |
 | `PIXABAY_API_KEY` | Không — có cả 2 key thì mỗi video chia đều clip từ Pexels + Pixabay (đa dạng hơn), không bắt buộc phải có key này | Free tại [pixabay.com/api/docs](https://pixabay.com/api/docs/) (đăng ký tài khoản → lấy API key, license cho phép dùng thương mại, không cần credit) |
 | `ELEVENLABS_API_KEY` | Không — chỉ dùng khi đổi `voice.provider: elevenlabs` trong config | [elevenlabs.io](https://elevenlabs.io/) |
@@ -192,6 +193,35 @@ từng `script.txt` tương ứng — đường dẫn nằm ở cột `job_dir` 
 ```bash
 python main.py batch --file data/topics.csv --resume
 ```
+
+---
+
+## 3.1 Giao diện web (đơn giản, chạy local)
+
+```bash
+python app.py
+```
+
+Mở [http://127.0.0.1:5050](http://127.0.0.1:5050). Form gồm: chọn topic
+(niche, quyết định từ khóa tìm B-roll) → chủ đề cụ thể → script (dán tay,
+bắt buộc vì đây vẫn là manual mode khi không có `ANTHROPIC_API_KEY`) → thời
+lượng (30-40s / 45-60s / 60-75s) → tỉ lệ khung hình (TikTok dọc 9:16 / YouTube
+ngang 16:9). Nhấn **Generate**, video được lưu vào `output/<slug>-<timestamp>/`
+như CLI và hiện luôn trong trang để xem thử.
+
+Ngôn ngữ giọng đọc theo giọng bạn chọn ở mục 3, không tự đoán từ script nữa.
+Chọn topic "Khác" thì bắt buộc tự điền từ khóa tìm hình ảnh (tiếng Anh, cách
+nhau bởi dấu phẩy) vì không có preset nào phù hợp.
+
+Nút **"AI viết script"** cạnh ô script gọi `script_generator.generate_script`
+(cùng module CLI dùng) để tự sinh script từ chủ đề — cần `ANTHROPIC_API_KEY`
+hoặc `GROQ_API_KEY` (miễn phí) trong `.env`; thiếu cả hai thì nút báo lỗi rõ
+ràng, bạn vẫn dán tay được như bình thường. Script AI sinh ra hiện thẳng vào
+ô textarea, sửa lại thoải mái trước khi bấm Generate.
+
+⚠️ Server dev của Flask ở máy này có thể mất tới ~30-40s để in dòng "Running
+on" lúc khởi động do reverse-DNS lookup chậm — đây là đặc thù môi trường,
+không phải lỗi; cứ đợi rồi refresh trang.
 
 ---
 

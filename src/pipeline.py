@@ -76,12 +76,19 @@ def _pick_music(topic: str, script: str, cfg: dict) -> Path | None:
         return None
 
 
-def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -> JobResult:
+def run_job(
+    topic: str, language: str, cfg: dict, out_dir: Path | None = None,
+    visual_keywords: list[str] | None = None,
+) -> JobResult:
     """Run the full pipeline for one topic.
 
     Pass `out_dir` to resume a job previously stopped at
     "awaiting_manual_script" (after you've edited its script.txt by hand).
     Otherwise a fresh output/<slug>-<timestamp>/ directory is created.
+
+    Pass `visual_keywords` for topics outside the channel's psychology niche
+    (e.g. Vietnamese topics with no English content words to extract) so
+    B-roll search isn't pulled toward the niche's fallback keyword pool.
     """
     resuming = out_dir is not None
     if out_dir is None:
@@ -110,10 +117,7 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
             script = script_path.read_text(encoding="utf-8").strip()
             log.info("using existing script.txt (%d words)", len(script.split()))
         else:
-            script = script_generator.generate_script(
-                topic, language=language,
-                max_words=cfg["script"]["max_words"], model=cfg["script"]["anthropic_model"],
-            )
+            script = script_generator.generate_script(topic, language=language, cfg=cfg["script"])
             script_path.write_text(script, encoding="utf-8")
         log_data["steps"]["script"] = "ok"
         log_data["script_word_count"] = len(script.split())
@@ -132,7 +136,7 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
     # 2. voice
     try:
         voice_path, srt_path = asyncio.run(
-            voice_generator.generate_voice(script, _voice_for_language(language, cfg), out_dir, cfg)
+            voice_generator.generate_voice(script, _voice_for_language(language, cfg), out_dir, cfg, language)
         )
         log_data["steps"]["voice"] = "ok"
     except Exception as e:
@@ -140,7 +144,10 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
 
     # 3. visuals
     try:
-        clips = visual_fetcher.fetch_visuals(topic, script, out_dir, cfg["visuals"]["clips_per_video"], cfg, language=language)
+        clips = visual_fetcher.fetch_visuals(
+            topic, script, out_dir, cfg["visuals"]["clips_per_video"], cfg,
+            language=language, keywords_override=visual_keywords,
+        )
         log_data["steps"]["visuals"] = "ok"
         log_data["clip_count"] = len(clips)
     except Exception as e:

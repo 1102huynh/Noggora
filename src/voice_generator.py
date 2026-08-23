@@ -50,12 +50,12 @@ def _group_word_boundaries_to_srt(cues: list, words_per_caption: int = WORDS_PER
 
 
 @retry_network(max_attempts=3)
-async def _synthesize(script: str, voice: str, rate: str, mp3_path: Path) -> "edge_tts.SubMaker":
+async def _synthesize(script: str, voice: str, rate: str, pitch: str, mp3_path: Path) -> "edge_tts.SubMaker":
     """edge-tts occasionally raises NoAudioReceived on an otherwise-healthy
     connection (observed under back-to-back batch requests) — retry with a
     fresh Communicate/stream rather than surfacing a transient hiccup as a
     hard job failure."""
-    communicate = edge_tts.Communicate(script, voice, rate=rate, boundary="WordBoundary")
+    communicate = edge_tts.Communicate(script, voice, rate=rate, pitch=pitch, boundary="WordBoundary")
     submaker = edge_tts.SubMaker()
     with open(mp3_path, "wb") as audio_file:
         async for chunk in communicate.stream():
@@ -72,7 +72,7 @@ async def _synthesize(script: str, voice: str, rate: str, mp3_path: Path) -> "ed
 
 
 async def generate_voice(
-    script: str, voice: str, out_dir: Path, cfg: dict | None = None
+    script: str, voice: str, out_dir: Path, cfg: dict | None = None, language: str = "en"
 ) -> tuple[Path, Path]:
     """Synthesize `script` with edge-tts, writing out_dir/voice.mp3 and voice.srt.
 
@@ -84,8 +84,10 @@ async def generate_voice(
     mp3_path = out_dir / "voice.mp3"
     srt_path = out_dir / "voice.srt"
 
-    rate = (cfg or {}).get("voice", {}).get("rate", "+0%")
-    submaker = await _synthesize(script, voice, rate, mp3_path)
+    voice_cfg = (cfg or {}).get("voice", {})
+    rate = voice_cfg.get(f"rate_{language}", voice_cfg.get("rate", "+0%"))
+    pitch = voice_cfg.get(f"pitch_{language}", voice_cfg.get("pitch", "+0Hz"))
+    submaker = await _synthesize(script, voice, rate, pitch, mp3_path)
 
     srt_text = _group_word_boundaries_to_srt(submaker.cues)
     srt_path.write_text(srt_text, encoding="utf-8")

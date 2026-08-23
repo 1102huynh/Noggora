@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noggora — Video Generator</title>
+<style>
+  :root {
+    --bg: #0b0c10;
+    --bg-glow: radial-gradient(circle at 15% 0%, rgba(108,92,231,0.16), transparent 45%),
+               radial-gradient(circle at 90% 100%, rgba(74,144,226,0.10), transparent 45%);
+    --panel: #14161d;
+    --panel-2: #191c25;
+    --field-bg: #0e0f14;
+    --border: #262a35;
+    --border-soft: #1e212a;
+    --text: #eef0f5;
+    --muted: #8b91a3;
+    --muted-2: #5f6577;
+    --accent: #7c6cf0;
+    --accent-2: #5b8cff;
+    --accent-hover: #8d7ff7;
+    --danger: #f0616a;
+    --success: #4fd39a;
+    --radius-lg: 18px;
+    --radius-md: 12px;
+    --radius-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    background-color: var(--bg);
+    background-image: var(--bg-glow);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 1280px;
+    height: min(94vh, 820px);
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 18px;
+  }
+
+  .panel {
+    background: linear-gradient(180deg, var(--panel) 0%, #121319 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 60px -20px rgba(0,0,0,0.6);
+  }
+
+  /* --- brand header --- */
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 22px 24px 18px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-shrink: 0;
+  }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 6px 16px -4px rgba(124,108,240,0.6);
+  }
+  .brand-mark svg { width: 18px; height: 18px; }
+  .brand-text h1 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .brand-text p { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+
+  /* --- left form panel --- */
+  #gen-form {
+    padding: 20px 24px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+    overflow-x: visible;
+    flex: 1;
+  }
+  #gen-form::-webkit-scrollbar { width: 6px; }
+  #gen-form::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .field { position: relative; }
+  .field label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #c4c8d4;
+    margin-bottom: 7px;
+  }
+  .field label .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border-radius: 5px;
+    background: rgba(124,108,240,0.16);
+    color: var(--accent-2);
+    font-size: 10px; font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  input[type=text] {
+    width: 100%;
+    background: var(--field-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input[type=text]::placeholder { color: var(--muted-2); }
+  input[type=text]:hover { border-color: #363b48; }
+  input[type=text]:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(124,108,240,0.18);
+  }
+
+  /* --- custom dropdown (replaces native <select>) --- */
+  .dd { position: relative; }
+  .dd-trigger {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--field-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 11px 12px 11px 14px;
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .dd-trigger:hover { border-color: #363b48; }
+  .dd.open .dd-trigger,
+  .dd-trigger:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(124,108,240,0.18);
+  }
+  .dd-chevron {
+    width: 9px; height: 9px;
+    border-right: 1.6px solid var(--muted);
+    border-bottom: 1.6px solid var(--muted);
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+    margin-top: -2px;
+  }
+  .dd.open .dd-chevron { transform: rotate(-135deg); margin-top: 2px; }
+
+  .dd-panel {
+    position: absolute;
+    left: 0; right: 0; top: calc(100% + 6px);
+    background: #1a1d27;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 16px 40px -12px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
+    padding: 6px;
+    z-index: 40;
+    max-height: 240px;
+    overflow-y: auto;
+    display: none;
+  }
+  .dd.open .dd-panel { display: block; }
+  .dd-panel::-webkit-scrollbar { width: 6px; }
+  .dd-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .dd-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 10px;
+    border-radius: 7px;
+    font-size: 13px;
+    color: #d6d9e2;
+    cursor: pointer;
+  }
+  .dd-option:hover { background: #232733; color: var(--text); }
+  .dd-option.selected { background: rgba(124,108,240,0.15); color: #cfc9fb; font-weight: 600; }
+  .dd-option .check {
+    width: 13px; height: 13px;
+    flex-shrink: 0;
+    color: var(--accent-2);
+    opacity: 0;
+  }
+  .dd-option.selected .check { opacity: 1; }
+
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { font-size: 11px; color: var(--muted-2); margin-top: 6px; line-height: 1.5; }
+
+  .divider { height: 1px; background: var(--border-soft); margin: 2px 0; flex-shrink: 0; }
+
+  button#generate-btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 13px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: filter 0.15s, transform 0.1s;
+    margin-top: 4px;
+    box-shadow: 0 10px 24px -8px rgba(124,108,240,0.55);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  button#generate-btn:hover:not(:disabled) { filter: brightness(1.08); }
+  button#generate-btn:active:not(:disabled) { transform: translateY(1px); }
+  button#generate-btn:disabled { background: #2b2e38; box-shadow: none; cursor: not-allowed; color: var(--muted); }
+
+  #status {
+    font-size: 12.5px;
+    min-height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #status.error { color: var(--danger); }
+  #status.loading { color: var(--muted); }
+  #status.done { color: var(--success); }
+  .spinner {
+    width: 13px; height: 13px;
+    border: 2px solid #333747; border-top-color: var(--accent-2);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --- right panel: script + preview --- */
+  .work-panel { flex: 1; display: flex; flex-direction: column; padding: 20px 24px 22px; gap: 16px; overflow: hidden; }
+  .work-section { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .work-section > label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12.5px; font-weight: 600; color: #c4c8d4;
+    margin-bottom: 8px;
+  }
+  .work-section > label .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border-radius: 5px;
+    background: rgba(124,108,240,0.16);
+    color: var(--accent-2);
+    font-size: 10px; font-weight: 800;
+  }
+  .work-section > label .tag {
+    margin-left: auto;
+    font-size: 10.5px; font-weight: 500; color: var(--muted-2);
+    text-transform: none;
+  }
+  .ai-btn {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 5px;
+    background: rgba(124,108,240,0.14);
+    border: 1px solid rgba(124,108,240,0.35);
+    color: #cfc9fb;
+    border-radius: 7px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .ai-btn:hover:not(:disabled) { background: rgba(124,108,240,0.24); }
+  .ai-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  textarea#script {
+    flex: 1;
+    width: 100%;
+    resize: none;
+    background: var(--field-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    color: var(--text);
+    font-size: 14.5px;
+    line-height: 1.65;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  textarea#script:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(124,108,240,0.18);
+  }
+  textarea#script::placeholder { color: var(--muted-2); }
+
+  .preview-box {
+    flex: 1;
+    min-height: 0;
+    background: radial-gradient(circle at 50% 30%, #1c2030 0%, #101218 70%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .preview-placeholder { color: var(--muted-2); font-size: 13px; text-align: center; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .preview-placeholder svg { opacity: 0.5; }
+  .preview-box video { max-width: 100%; max-height: 100%; display: block; border-radius: 4px; }
+  .preview-box .path {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(0deg, rgba(10,11,15,0.92), transparent);
+    color: var(--muted); font-size: 10.5px; padding: 16px 12px 8px;
+    word-break: break-all; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="panel">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 6.5C4 5.67 4.67 5 5.5 5h9c.83 0 1.5.67 1.5 1.5v11c0 .83-.67 1.5-1.5 1.5h-9A1.5 1.5 0 014 17.5v-11z" fill="#fff" fill-opacity="0.95"/>
+          <path d="M16.5 10.5l3.3-2.2c.6-.4 1.4.03 1.4.75v6.9c0 .72-.8 1.15-1.4.75l-3.3-2.2v-4z" fill="#fff" fill-opacity="0.95"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>Noggora Video Generator</h1>
+        <p>Faceless video, tự động hoá từ script</p>
+      </div>
+    </div>
+    <form id="gen-form">
+      <div class="field">
+        <label><span class="num">1</span>Topic</label>
+        <div class="dd" data-name="category" data-value="{{ categories|list|first }}">
+          <button type="button" class="dd-trigger"><span class="dd-label"></span><span class="dd-chevron"></span></button>
+          <div class="dd-panel">
+            {% for key, c in categories.items() %}
+            <div class="dd-option" data-value="{{ key }}">{{ c.label }}<svg class="check" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Từ khóa hình ảnh <span style="font-weight:400;color:var(--muted-2)">(tùy chọn)</span></label>
+        <input type="text" name="keywords" id="keywords" placeholder="vd: solar system, planets space">
+        <div class="hint">Bắt buộc nếu chọn "Khác" ở mục Topic</div>
+      </div>
+
+      <div class="field">
+        <label><span class="num">2</span>Chủ đề cụ thể</label>
+        <input type="text" name="topic" id="topic" placeholder="vd: Hệ Mặt Trời" required>
+      </div>
+
+      <div class="field">
+        <label><span class="num">3</span>Giọng đọc</label>
+        <div class="dd" data-name="voice" data-value="{{ voices|list|first }}">
+          <button type="button" class="dd-trigger"><span class="dd-label"></span><span class="dd-chevron"></span></button>
+          <div class="dd-panel">
+            {% for key, v in voices.items() %}
+            <div class="dd-option" data-value="{{ key }}">{{ v.label }}<svg class="check" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label><span class="num">4</span>Thời lượng</label>
+          <div class="dd" data-name="duration" data-value="{{ durations|list|first }}">
+            <button type="button" class="dd-trigger"><span class="dd-label"></span><span class="dd-chevron"></span></button>
+            <div class="dd-panel">
+              {% for key, d in durations.items() %}
+              <div class="dd-option" data-value="{{ key }}">{{ d.label }}<svg class="check" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label><span class="num">5</span>Khung hình</label>
+          <div class="dd" data-name="aspect" data-value="{{ aspects|list|first }}">
+            <button type="button" class="dd-trigger"><span class="dd-label"></span><span class="dd-chevron"></span></button>
+            <div class="dd-panel">
+              {% for key, a in aspects.items() %}
+              <div class="dd-option" data-value="{{ key }}">{{ a.label }}<svg class="check" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <button type="submit" id="generate-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L10 22L19.5 9.5H13L13 2Z" fill="currentColor"/></svg>
+        Generate
+      </button>
+      <div id="status"></div>
+    </form>
+  </div>
+
+  <div class="panel work-panel">
+    <div class="work-section" style="flex: 0.85;">
+      <label>
+        <span class="num">6</span>Script mô tả chủ đề
+        <button type="button" id="ai-script-btn" class="ai-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6L12 3z" fill="currentColor"/></svg>
+          AI viết script
+        </button>
+      </label>
+      <textarea id="script" placeholder="Dán hoặc viết script sẽ được đọc trong video, hoặc bấm &quot;AI viết script&quot; ở trên (cần ANTHROPIC_API_KEY hoặc GROQ_API_KEY free trong .env)..." required></textarea>
+    </div>
+    <div class="work-section" style="flex: 1.15;">
+      <label>Video preview <span class="tag" id="preview-tag"></span></label>
+      <div class="preview-box" id="preview-box">
+        <div class="preview-placeholder">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9.5L14.5 12L10 14.5V9.5Z" fill="currentColor"/></svg>
+          Video sẽ hiện ở đây sau khi Generate
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- custom dropdown component (replaces native <select> for full style control) ---
+class Dropdown {
+  constructor(el) {
+    this.el = el;
+    this.name = el.dataset.name;
+    this.trigger = el.querySelector(".dd-trigger");
+    this.label = el.querySelector(".dd-label");
+    this.panel = el.querySelector(".dd-panel");
+    this.options = [...el.querySelectorAll(".dd-option")];
+    this.value = el.dataset.value;
+
+    this._select(this.value, false);
+
+    this.trigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._toggle();
+    });
+    this.options.forEach((opt) => {
+      opt.addEventListener("click", () => {
+        this._select(opt.dataset.value, true);
+        this._close();
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!this.el.contains(e.target)) this._close();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this._close();
+    });
+  }
+  _toggle() {
+    document.querySelectorAll(".dd.open").forEach((d) => { if (d !== this.el) d.classList.remove("open"); });
+    this.el.classList.toggle("open");
+  }
+  _close() { this.el.classList.remove("open"); }
+  _select(value, fire) {
+    this.value = value;
+    const opt = this.options.find((o) => o.dataset.value === value);
+    this.label.textContent = opt ? opt.textContent.trim() : "";
+    this.options.forEach((o) => o.classList.toggle("selected", o.dataset.value === value));
+    if (fire) this.el.dispatchEvent(new CustomEvent("change"));
+  }
+}
+
+const dropdowns = {};
+document.querySelectorAll(".dd").forEach((el) => {
+  dropdowns[el.dataset.name] = new Dropdown(el);
+});
+
+const form = document.getElementById("gen-form");
+const btn = document.getElementById("generate-btn");
+const status = document.getElementById("status");
+const previewBox = document.getElementById("preview-box");
+const previewTag = document.getElementById("preview-tag");
+const aiScriptBtn = document.getElementById("ai-script-btn");
+const scriptEl = document.getElementById("script");
+
+aiScriptBtn.addEventListener("click", async () => {
+  const topic = document.getElementById("topic").value.trim();
+  if (!topic) {
+    status.className = "error";
+    status.textContent = "Điền chủ đề cụ thể trước khi bấm AI viết script.";
+    return;
+  }
+
+  const originalLabel = aiScriptBtn.innerHTML;
+  aiScriptBtn.disabled = true;
+  aiScriptBtn.innerHTML = '<span class="spinner"></span>Đang viết...';
+  status.className = "loading";
+  status.textContent = "";
+
+  try {
+    const res = await fetch("/generate-script", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        topic,
+        voice: dropdowns.voice.value,
+        category: dropdowns.category.value,
+        duration: dropdowns.duration.value,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      status.className = "error";
+      status.textContent = data.error || "Không sinh được script.";
+      return;
+    }
+    scriptEl.value = data.script;
+    status.className = "done";
+    status.textContent = "Đã sinh script — bạn có thể sửa lại trước khi Generate.";
+  } catch (err) {
+    status.className = "error";
+    status.textContent = "Lỗi kết nối: " + err;
+  } finally {
+    aiScriptBtn.disabled = false;
+    aiScriptBtn.innerHTML = originalLabel;
+  }
+});
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    category: dropdowns.category.value,
+    keywords: document.getElementById("keywords").value,
+    topic: document.getElementById("topic").value,
+    script: document.getElementById("script").value,
+    voice: dropdowns.voice.value,
+    duration: dropdowns.duration.value,
+    aspect: dropdowns.aspect.value,
+  };
+
+  if (!payload.topic.trim() || !payload.script.trim()) {
+    status.className = "error";
+    status.textContent = "Vui lòng điền đủ chủ đề và script.";
+    return;
+  }
+
+  btn.disabled = true;
+  status.className = "loading";
+  status.innerHTML = '<span class="spinner"></span>Đang tạo video (~30-90s)...';
+  previewTag.textContent = "";
+  previewBox.innerHTML = '<div class="preview-placeholder"><span class="spinner" style="width:22px;height:22px;border-width:3px;"></span></div>';
+
+  try {
+    const res = await fetch("/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      status.className = "error";
+      status.textContent = data.error || "Có lỗi xảy ra.";
+      previewBox.innerHTML = `<div class="preview-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9.5L14.5 12L10 14.5V9.5Z" fill="currentColor"/></svg>
+        Video sẽ hiện ở đây sau khi Generate</div>`;
+      return;
+    }
+
+    status.className = "done";
+    status.textContent = "Đã tạo xong video";
+    previewTag.textContent = payload.aspect === "youtube" ? "16:9" : "9:16";
+    previewBox.innerHTML = `
+      <video controls autoplay src="${data.video_url}"></video>
+      <div class="path">${data.job_dir}</div>
+    `;
+  } catch (err) {
+    status.className = "error";
+    status.textContent = "Lỗi kết nối: " + err;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

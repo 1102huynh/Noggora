@@ -32,6 +32,7 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
     short_topic = topic if len(topic) <= 40 else topic[:37] + "..."
     if result.status == "done":
         print(f'[{i}/{total}] "{short_topic}" -> {result.final_video} ✅')
+        print(f"    Title (copy for YouTube): {result.title}")
     elif result.status == "awaiting_manual_script":
         print(f'[{i}/{total}] "{short_topic}" -> awaiting manual script: {result.out_dir / "script.txt"} ✋')
     else:

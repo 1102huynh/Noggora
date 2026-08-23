@@ -29,6 +29,7 @@ class JobResult:
     final_video: Path | None = None
     failed_step: str | None = None
     error: str | None = None
+    title: str | None = None  # set when status == "done" — ready to paste as the YouTube title
 
 
 def _now_iso() -> str:
@@ -172,7 +173,15 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
     log_data["status"] = "done"
     log_data["final_video"] = str(final_path)
     _write_job_log(out_dir, log_data)
-    return JobResult(status="done", out_dir=out_dir, final_video=final_path)
+
+    # The topic is already phrased as a hook question, which is exactly what
+    # works as a YouTube Shorts/TikTok title — write it out next to the video
+    # so it's there to copy-paste when posting, without having to scroll back
+    # through terminal output or re-open script.txt.
+    title_path = out_dir / "title.txt"
+    title_path.write_text(topic, encoding="utf-8")
+
+    return JobResult(status="done", out_dir=out_dir, final_video=final_path, title=topic)
 
 
 if __name__ == "__main__":

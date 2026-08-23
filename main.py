@@ -58,7 +58,8 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
         (out_dir / "script.txt").write_text(entry["script"], encoding="utf-8")
 
     result = run_job(entry["topic"], entry["language"], cfg, out_dir=out_dir)
-    topic_bank.mark_used(bank_path, entry["id"])
+    if result.status == "done":
+        topic_bank.mark_used(bank_path, entry["id"])
     _print_result(1, 1, entry["topic"], result)
     return 0 if result.status == "done" else 1
 

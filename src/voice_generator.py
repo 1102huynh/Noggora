@@ -53,38 +53,43 @@ def _split_into_sentences(script: str) -> list[str]:
     return [s for s in _SENTENCE_SPLIT_RE.split(script.strip()) if s]
 
 
-def _group_cues_by_sentence(cues: list, script: str) -> list[list]:
-    """Slice spoken-word cues into one group per sentence of the original
-    script, so a caption block is a full sentence instead of an arbitrary
-    word count. Sentence boundaries come from the script's punctuation; only
-    each sentence's word *count* is used to slice the cues — cue text is
-    whatever the TTS engine actually said (numbers spelled out, etc.) and
-    won't always match the written script word-for-word.
+def _group_cues_by_sentence(cues: list, script: str) -> list[tuple[str, list]]:
+    """Pair each sentence of the original script with the slice of spoken-word
+    cues that covers it, as (sentence_text, cue_group). Sentence boundaries
+    come from the script's punctuation; each sentence's word *count* (not its
+    text) is used to slice the cues, since cue text is whatever the TTS
+    engine actually said (numbers spelled out, punctuation stripped, etc.)
+    and won't line up with the written script word-for-word — only the
+    written sentence_text is used for what's actually displayed, so the
+    caption keeps the script's own commas/punctuation instead of reading as
+    one run-on clause.
     """
-    word_counts = [len(s.split()) for s in _split_into_sentences(script)]
+    sentences = _split_into_sentences(script)
     groups = []
     i = 0
-    for count in word_counts:
+    for sentence in sentences:
         if i >= len(cues):
             break
+        count = len(sentence.split())
         group = cues[i : i + count]
         if group:
-            groups.append(group)
+            groups.append((sentence, group))
         i += count
     if i < len(cues):  # leftover cues from a word-count mismatch — keep them, don't drop
-        groups.append(cues[i:])
+        leftover = cues[i:]
+        groups.append((" ".join(c.content for c in leftover), leftover))
     return groups
 
 
 def _cues_to_srt(cues: list, script: str) -> str:
     """Render cues as SRT, one caption block per sentence of `script`: the
-    whole sentence appears as a single block, timed from when its first word
-    is spoken to when its last word finishes — not built up word-by-word.
+    whole sentence (with its original punctuation) appears as a single
+    block, timed from when its first word is spoken to when its last word
+    finishes — not built up word-by-word.
     """
     lines = []
     index = 1
-    for group in _group_cues_by_sentence(cues, script):
-        text = " ".join(c.content for c in group)
+    for text, group in _group_cues_by_sentence(cues, script):
         start = group[0].start
         end = group[-1].end
         lines.append(

@@ -14,6 +14,12 @@ log = get_logger("video_assembler")
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
+# Bundled so the caption font renders the same on every machine regardless of
+# what's actually installed system-wide — settings.yaml's subtitle.font
+# ("Montserrat-Bold") was silently falling back to whatever generic sans-serif
+# libass could find, because Montserrat was never actually installed.
+_FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+
 
 def _escape_ffmpeg_filter_path(path: Path) -> str:
     """Escape a filesystem path for safe use inside an ffmpeg -filter_complex
@@ -74,7 +80,8 @@ def assemble_video(
     filter_parts.append(f"{concat_inputs}concat=n={len(clips)}:v=1:a=0[vconcat]")
 
     ass_escaped = _escape_ffmpeg_filter_path(ass_subtitle_path)
-    filter_parts.append(f"[vconcat]ass='{ass_escaped}'[vout]")
+    fontsdir_escaped = _escape_ffmpeg_filter_path(_FONTS_DIR)
+    filter_parts.append(f"[vconcat]ass='{ass_escaped}':fontsdir='{fontsdir_escaped}'[vout]")
 
     # --- audio: voice always; mix in music (with fade in/out) if provided ---
     if music_idx is not None:

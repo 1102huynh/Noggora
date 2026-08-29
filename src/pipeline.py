@@ -59,11 +59,13 @@ def _write_placeholder_script(script_path: Path, out_dir: Path) -> None:
 
 def _voice_for_language(language: str, cfg: dict) -> str:
     voice_cfg = cfg["voice"]
+    provider = voice_cfg.get("provider", "edge_tts")
+    prefix = "elevenlabs_voice" if provider == "elevenlabs" else "edge_voice"
     if language == "vi":
-        return voice_cfg["edge_voice_vi"]
+        return voice_cfg[f"{prefix}_vi"]
     if language != "en":
-        log.warning("no configured voice for language=%r, defaulting to edge_voice_en", language)
-    return voice_cfg["edge_voice_en"]
+        log.warning("no configured voice for language=%r, defaulting to %s_en", language, prefix)
+    return voice_cfg[f"{prefix}_en"]
 
 
 def _pick_music(topic: str, script: str, cfg: dict) -> Path | None:

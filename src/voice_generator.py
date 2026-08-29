@@ -77,25 +77,20 @@ def _group_cues_by_sentence(cues: list, script: str) -> list[list]:
 
 
 def _cues_to_srt(cues: list, script: str) -> str:
-    """Render cues as SRT, one caption block per sentence of `script`. Within
-    a block, words are revealed progressively as they're actually spoken —
-    the first word shows only once said, the second is appended once *it's*
-    said, and so on — rather than the whole sentence flashing onto screen
-    the instant its first word starts.
+    """Render cues as SRT, one caption block per sentence of `script`: the
+    whole sentence appears as a single block, timed from when its first word
+    is spoken to when its last word finishes — not built up word-by-word.
     """
     lines = []
     index = 1
     for group in _group_cues_by_sentence(cues, script):
-        for j in range(len(group)):
-            text = " ".join(c.content for c in group[: j + 1])
-            start = group[j].start
-            # Hold this partial line until the next word starts (or, for the
-            # sentence's last word, until it finishes) so it doesn't blink.
-            end = group[j + 1].start if j + 1 < len(group) else group[j].end
-            lines.append(
-                f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
-            )
-            index += 1
+        text = " ".join(c.content for c in group)
+        start = group[0].start
+        end = group[-1].end
+        lines.append(
+            f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
+        )
+        index += 1
     return "\n".join(lines)
 
 

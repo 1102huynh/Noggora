@@ -23,7 +23,7 @@ voice:
 
 subtitle:
   font: "Montserrat-Bold"
-  font_size: 72
+  font_size: 52
   color: "&H00FFFFFF"           # trắng, định dạng ASS
   outline_color: "&H00000000"
   position: "bottom_center"     # bottom_center | middle_center

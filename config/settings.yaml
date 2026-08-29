@@ -6,10 +6,17 @@ video:
   min_duration_sec: 25
 
 voice:
-  provider: edge_tts            # edge_tts | elevenlabs
+  provider: elevenlabs          # edge_tts | elevenlabs
   edge_voice_en: en-US-AriaNeural
   edge_voice_vi: vi-VN-HoaiMyNeural
-  rate: "+0%"
+  rate: "-15%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
+  # ElevenLabs (cần ELEVENLABS_API_KEY trong .env). Đổi giọng: vào
+  # elevenlabs.io -> Voice Library -> chọn giọng -> copy Voice ID, dán vào đây.
+  # "Rachel" (mặc định dưới đây) là giọng nữ tiếng Anh, ổn định lâu năm của ElevenLabs.
+  elevenlabs_voice_en: "21m00Tcm4TlvDq8ikWAM"
+  elevenlabs_voice_vi: "21m00Tcm4TlvDq8ikWAM"   # model multilingual đọc được tiếng Việt qua cùng voice
+  elevenlabs_model: "eleven_multilingual_v2"
+  elevenlabs_speed: 0.85         # chỉ áp dụng cho elevenlabs — 1.0 = gốc, khoảng hợp lệ ~0.7-1.2
 
 subtitle:
   font: "Montserrat-Bold"

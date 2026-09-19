@@ -81,21 +81,63 @@ def _group_cues_by_sentence(cues: list, script: str) -> list[tuple[str, list]]:
     return groups
 
 
-def _cues_to_srt(cues: list, script: str) -> str:
-    """Render cues as SRT, one caption block per sentence of `script`: the
-    whole sentence (with its original punctuation) appears as a single
-    block, timed from when its first word is spoken to when its last word
-    finishes — not built up word-by-word.
+def _chunk_words(words: list[str], max_words: int) -> list[list[str]]:
+    """Split one sentence's words into short caption phrases: break at the
+    script's own commas/colons first (so a phrase reads naturally), split any
+    phrase still longer than max_words into even pieces, then fold dangling
+    1-2 word scraps into a neighbour."""
+    phrases: list[list[str]] = []
+    cur: list[str] = []
+    for w in words:
+        cur.append(w)
+        if w.endswith((",", ";", ":")):
+            phrases.append(cur)
+            cur = []
+    if cur:
+        phrases.append(cur)
+
+    pieces: list[list[str]] = []
+    for p in phrases:
+        if len(p) <= max_words:
+            pieces.append(p)
+            continue
+        n = -(-len(p) // max_words)  # ceil
+        size = -(-len(p) // n)
+        pieces.extend(p[i : i + size] for i in range(0, len(p), size))
+
+    merged: list[list[str]] = []
+    for piece in pieces:
+        if merged and (len(piece) <= 2 or len(merged[-1]) <= 2) and len(merged[-1]) + len(piece) <= max_words + 1:
+            merged[-1] = merged[-1] + piece
+        else:
+            merged.append(piece)
+    return merged
+
+
+def _cues_to_srt(cues: list, script: str, max_words: int = 6) -> str:
+    """Render cues as SRT, one caption per short phrase (<= max_words) of each
+    sentence of `script`. Text is the script's own wording/punctuation; each
+    phrase is timed from when its first word is spoken to when its last word
+    finishes (held on screen until the next phrase of the same sentence
+    starts, so captions don't flicker between phrases).
     """
+    entries: list[tuple[timedelta, timedelta, str, int]] = []  # start, end, text, sentence idx
+    for s_idx, (sentence, group) in enumerate(_group_cues_by_sentence(cues, script)):
+        words = sentence.split()
+        offset = 0
+        for chunk in _chunk_words(words, max_words):
+            first = group[min(offset, len(group) - 1)]
+            last = group[min(offset + len(chunk) - 1, len(group) - 1)]
+            entries.append((first.start, last.end, " ".join(chunk), s_idx))
+            offset += len(chunk)
+
     lines = []
-    index = 1
-    for text, group in _group_cues_by_sentence(cues, script):
-        start = group[0].start
-        end = group[-1].end
+    for i, (start, end, text, s_idx) in enumerate(entries):
+        if i + 1 < len(entries) and entries[i + 1][3] == s_idx:
+            end = max(end, entries[i + 1][0])
         lines.append(
-            f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
+            f"{i + 1}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
         )
-        index += 1
     return "\n".join(lines)
 
 
@@ -204,22 +246,33 @@ async def generate_voice(
         rate = voice_cfg.get("rate", "+0%")
         cues = await _synthesize_edge(script, voice, rate, mp3_path)
 
-    srt_text = _cues_to_srt(cues, script)
+    max_caption_words = (cfg or {}).get("subtitle", {}).get("max_words_per_caption", 6)
+    srt_text = _cues_to_srt(cues, script, max_caption_words)
     srt_path.write_text(srt_text, encoding="utf-8")
 
     duration = ffprobe_duration(mp3_path)
-    max_duration = (cfg or {}).get("video", {}).get("max_duration_sec")
+    video_cfg = (cfg or {}).get("video", {})
+    max_duration = video_cfg.get("max_duration_sec")
     if max_duration and duration > max_duration:
         log.warning(
             "voice.mp3 is %.1fs, longer than max_duration_sec=%ss configured — "
             "shorten the script for the next run.",
             duration, max_duration,
         )
+    min_duration = video_cfg.get("min_duration_sec")
+    if min_duration and duration < min_duration:
+        log.warning(
+            "voice.mp3 is %.1fs, shorter than min_duration_sec=%ss configured — "
+            "the script is probably too short.",
+            duration, min_duration,
+        )
 
     last_cue_end = cues[-1].end.total_seconds()
-    if abs(duration - last_cue_end) > 1.0:
+    # edge-tts always leaves ~1s of trailing silence, so only flag a cue that
+    # runs past the audio or a much larger gap (words missing from the end).
+    if last_cue_end > duration + 0.5 or duration - last_cue_end > 2.5:
         log.warning(
-            "srt last cue end (%.2fs) drifts from audio duration (%.2fs) by > 1s",
+            "srt last cue end (%.2fs) drifts from audio duration (%.2fs)",
             last_cue_end, duration,
         )
 

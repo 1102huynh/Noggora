@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """CLI entrypoint for the Noggora pipeline.
 
-    python main.py auto                                            # zero-argument: next topic from data/topic_bank.csv
+    python main.py auto                                            # zero-argument: Claude writes today's topic + script
+    python main.py auto --bank-only                                # skip AI, use the pre-written data/topic_bank.csv
     python main.py single --topic "..." --lang vi
     python main.py single --resume "output/<job_slug>"          # after editing script.txt
     python main.py batch --file data/topics.csv --limit 10
@@ -13,13 +14,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src import topic_bank
+from src import daily_topic, topic_bank
 from src.pipeline import JobResult, run_job
 from src.utils import check_ffmpeg, get_logger, load_config, new_job_slug
 
@@ -40,26 +40,44 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
 
 
 def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
-    """Zero-argument daily video: pick the next unused topic from the bank,
-    run it end to end, mark it used. Needs no ANTHROPIC_API_KEY — if one
-    isn't set, the bank's pre-written script is used as-is; if one *is* set,
-    run_job still calls the live API for a fresh script instead."""
+    """Zero-argument video for today. Preferred: ask Claude (the `claude` CLI
+    on your Claude Code login, or the Anthropic API if a key is set) to write
+    a brand-new topic + script + footage keywords, so nothing is pre-generated
+    in bulk. If that isn't available or fails, fall back to the next unused
+    pre-written topic from the bank (topping the bank up when it runs low)."""
     bank_path = Path(args.bank)
-    topic_bank.ensure_fresh_batch(bank_path, model=cfg["script"]["anthropic_model"])
-    try:
-        entry = topic_bank.pick_next(bank_path, language=args.lang)
-    except (FileNotFoundError, ValueError) as e:
-        log.error(str(e))
-        return 1
+
+    entry = None
+    generated = False
+    if not args.bank_only and args.lang in (None, "en"):
+        entry = daily_topic.generate_daily_entry(cfg, bank_path)
+        generated = entry is not None
+        if entry is None:
+            log.warning("could not generate a fresh script — using the pre-written topic bank instead")
+
+    if entry is None:
+        topic_bank.ensure_fresh_batch(bank_path, model=cfg["script"]["anthropic_model"])
+        try:
+            entry = topic_bank.pick_next(bank_path, language=args.lang)
+        except (FileNotFoundError, ValueError) as e:
+            log.error(str(e))
+            return 1
 
     out_dir = Path("output") / new_job_slug(entry["topic"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Either way the script is already in hand, so run_job must not generate another.
+    (out_dir / "script.txt").write_text(entry["script"], encoding="utf-8")
 
-    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-        (out_dir / "script.txt").write_text(entry["script"], encoding="utf-8")
+    if generated:
+        # Archive right away, not after the render: if the video step fails, this
+        # topic must still count as made, or tomorrow could generate it again.
+        # (Re-render the same script with: main.py single --resume <that output dir>.)
+        topic_bank.record_generated_used(entry, bank_path)
+        log.info("saved to %s — script also in %s", topic_bank.DEFAULT_USED_PATH, out_dir / "script.txt")
 
-    result = run_job(entry["topic"], entry["language"], cfg, out_dir=out_dir)
-    if result.status == "done":
+    visual_keywords = [k.strip() for k in (entry.get("visual_keywords") or "").split(";") if k.strip()]
+    result = run_job(entry["topic"], entry["language"], cfg, out_dir=out_dir, visual_keywords=visual_keywords or None)
+    if result.status == "done" and not generated:
         topic_bank.mark_used(bank_path, entry["id"])
     _print_result(1, 1, entry["topic"], result)
     return 0 if result.status == "done" else 1
@@ -150,6 +168,7 @@ def main() -> int:
     p_auto = sub.add_parser("auto", help="Zero-argument video: auto-picks the next unused topic from data/topic_bank.csv")
     p_auto.add_argument("--bank", default="data/topic_bank.csv")
     p_auto.add_argument("--lang", choices=["en", "vi"], default=None, help="Restrict to one language (default: whichever comes up next in the bank)")
+    p_auto.add_argument("--bank-only", action="store_true", help="Skip AI generation and use the pre-written topic bank")
 
     p_single = sub.add_parser("single", help="Generate one video from one topic")
     p_single.add_argument("--topic", help="Topic string (required unless --resume points at a job with a job_log.json)")

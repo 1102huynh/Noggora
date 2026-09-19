@@ -1,11 +1,15 @@
-"""Fetch B-roll for a video: clips are split evenly across every online
-source that has an API key configured (Pexels + Pixabay today), so a single
-video mixes footage from both instead of treating one as a mere fallback for
-the other. If a source comes up short on its quota, the remaining sources are
-asked to cover the gap; if none of them can, a local fallback (then a
-synthesized placeholder) guarantees this function never returns an empty
-list — this is the step most likely to fail (no key, no results, rate
-limit), so it must degrade gracefully rather than crash the job.
+"""Fetch B-roll for a video, one clip per scene, matched to what is being said.
+
+Every scene gets its own search queries, in priority order:
+  1. the topic's hand-written `visual_keywords[i]` (from topic_bank.csv),
+  2. concrete things mentioned in that scene's sentences (see _CONCEPT_MAP),
+  3. a shuffled pool of on-brand niche queries (NICHE_KEYWORDS).
+Scenes alternate between the online sources that have an API key (Pexels,
+Pixabay) so one video mixes footage from both, and a source that comes up
+empty is covered by the other. If nothing online works, a local fallback (then
+a synthesized placeholder) guarantees this function never returns an empty
+list — this is the step most likely to fail (no key, no results, rate limit),
+so it must degrade gracefully rather than crash the job.
 
 Both Pexels and Pixabay are used specifically because their standard license
 grants free commercial use with no attribution required — the same
@@ -30,12 +34,10 @@ log = get_logger("visual_fetcher")
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
 PIXABAY_SEARCH_URL = "https://pixabay.com/api/videos/"
 
-# Niche keywords ensure every search stays anchored to the channel's
-# psychology/mind visual identity, even when the topic yields no usable
-# English content words (e.g. a Vietnamese topic). Kept deliberately varied
-# (not just "psychology") since that single term over-indexes on generic
-# therapist/clinic stock footage on Pexels; a shuffled subset each call also
-# means re-running the same topic doesn't keep hitting the same clips.
+# Niche queries keep a scene on the channel's psychology/mind visual identity
+# when nothing more specific was found. Deliberately varied (a single term like
+# "psychology" over-indexes on generic therapist/clinic stock footage), and
+# shuffled per call so re-running a topic doesn't hit the same clips.
 NICHE_KEYWORDS = [
     "person thinking",
     "human brain",
@@ -49,56 +51,76 @@ NICHE_KEYWORDS = [
     "emotions face closeup",
 ]
 
-_STOPWORDS = {
-    "the", "a", "an", "is", "are", "was", "were", "why", "does", "do", "did",
-    "how", "what", "when", "who", "people", "you", "your", "this", "that",
-    "of", "to", "in", "on", "for", "and", "or", "not", "it", "its", "be",
-    "can", "will", "with", "from", "by", "as", "at", "if", "so", "but",
-    "than", "then", "more", "most", "less", "make", "makes", "one", "them",
-    "after", "before", "into", "onto", "about", "because", "into", "have",
-    "has", "had", "just", "even", "only", "really", "actually", "which",
-}
+# Concrete words that might appear in a scene's text -> a stock-footage query
+# that actually shows them. First matching entries win, so keep specific words
+# ahead of vague ones.
+_CONCEPT_MAP: list[tuple[tuple[str, ...], str]] = [
+    (("movie", "film", "cinema"), "cinema audience watching"),
+    (("coffee", "cafe"), "coffee cup table"),
+    (("phone", "smartphone", "scroll"), "person using smartphone"),
+    (("crowd", "crowded", "bystander", "stranger"), "crowd of people walking"),
+    (("team", "group", "meeting", "boss", "coworker", "office"), "office meeting people"),
+    (("friend", "friends", "closer", "connection"), "friends talking together"),
+    (("mirror",), "person looking in mirror"),
+    (("study", "exam", "test", "learn", "student", "cramming"), "student studying"),
+    (("shopping", "price", "jacket", "sale", "store", "buy", "dollars", "money", "pay"), "shopping store"),
+    (("traffic", "driver", "driving", "car"), "city traffic driving"),
+    (("night", "evening", "sleep", "tired"), "person at window night"),
+    (("song", "songs", "music", "hum"), "headphones listening music"),
+    (("gym", "exercise", "workout"), "gym workout"),
+    (("cook", "cooked", "meal", "takeout", "food", "dessert"), "cooking in kitchen"),
+    (("clock", "hour", "week", "minutes", "waiting", "deadline"), "clock ticking"),
+    (("laugh", "laughing", "joke", "funny"), "people laughing"),
+    (("afraid", "fear", "danger", "scared", "nervous", "anxious"), "anxious person"),
+    (("comment", "criticism", "compliments", "praise"), "person reading phone reaction"),
+    (("memory", "remember", "memories", "nostalgia", "school", "old days"), "old photographs memories"),
+    (("choice", "choices", "options", "decide", "decision"), "choosing between options"),
+    (("secret", "confess", "silence", "quiet", "question"), "quiet conversation two people"),
+    (("mistake", "trip", "spill", "clumsy"), "person spilling coffee"),
+    (("project", "goal", "finish", "progress", "sprint", "task", "tasks"), "person working laptop"),
+    (("furniture", "shelf", "build", "assembled", "home"), "assembling furniture"),
+]
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _VIDEO_EXTS = {".mp4", ".mov", ".webm"}
 
 
-def _extract_keywords(topic: str, script: str, n: int = 5, language: str = "en") -> list[str]:
-    """Rule-based keyword extraction: a couple of ascii content-words from the
-    topic/script plus the fixed niche keyword pool, so results stay on-theme.
+def _concept_queries(scene_text: str, n: int = 2) -> list[str]:
+    """Up to n stock-footage queries for concrete things named in scene_text."""
+    words = set(re.findall(r"[a-z']+", scene_text.lower()))
+    padded = f" {scene_text.lower()} "
+    found: list[str] = []
+    for triggers, query in _CONCEPT_MAP:
+        if any((t in words) or (" " in t and f" {t} " in padded) for t in triggers):
+            found.append(query)
+        if len(found) >= n:
+            break
+    return found
 
-    Content-word extraction only runs for language="en". Most Vietnamese
-    words carry diacritics and get filtered out by the a-z regex as intended,
-    but some common short words (e.g. "nghe", "phim") happen to be pure
-    ASCII and would otherwise slip through as if they were English search
-    terms — Pexels then matches them almost randomly (observed: "phim"
-    returned an unrelated cow-and-bus clip). Simplest reliable fix is to
-    gate this on language rather than try to blocklist individual words.
-    """
-    seen: list[str] = []
-    if language == "en":
-        text = f"{topic} {script}".lower()
-        words = re.findall(r"[a-z]{4,}", text)
-        for w in words:
-            if w not in _STOPWORDS and w not in seen:
-                seen.append(w)
-    shuffled_niche = NICHE_KEYWORDS.copy()
-    random.shuffle(shuffled_niche)
-    keywords = seen[:2] + shuffled_niche
-    return keywords[:n]
+
+def scene_queries(index: int, scene_text: str, visual_keywords: list[str] | None) -> list[str]:
+    """Search queries for scene `index`, best first (see module docstring)."""
+    queries: list[str] = []
+    if visual_keywords and index < len(visual_keywords):
+        queries.append(visual_keywords[index])
+    queries.extend(_concept_queries(scene_text))
+    niche = NICHE_KEYWORDS.copy()
+    random.shuffle(niche)
+    queries.extend(niche)
+    seen: set[str] = set()
+    return [q for q in queries if not (q in seen or seen.add(q))]
 
 
 @retry_network(max_attempts=3)
-def _search_pexels(keyword: str, api_key: str, min_duration: int) -> list[dict]:
+def _search_pexels(query: str, api_key: str) -> list[dict]:
     resp = requests.get(
         PEXELS_SEARCH_URL,
         headers={"Authorization": api_key},
-        params={"query": keyword, "orientation": "portrait", "per_page": 10},
+        params={"query": query, "orientation": "portrait", "per_page": 10},
         timeout=15,
     )
     resp.raise_for_status()
-    videos = resp.json().get("videos", [])
-    return [v for v in videos if v.get("duration", 0) >= min_duration]
+    return resp.json().get("videos", [])
 
 
 def _pick_video_file(video: dict) -> str | None:
@@ -114,29 +136,37 @@ def _pick_video_file(video: dict) -> str | None:
 
 
 @retry_network(max_attempts=3)
-def _search_pixabay(keyword: str, api_key: str, min_duration: int) -> list[dict]:
+def _search_pixabay(query: str, api_key: str) -> list[dict]:
     resp = requests.get(
         PIXABAY_SEARCH_URL,
-        params={"key": api_key, "q": keyword, "video_type": "film", "safesearch": "true", "per_page": 10},
+        params={"key": api_key, "q": query, "video_type": "film", "safesearch": "true", "per_page": 10},
         timeout=15,
     )
     resp.raise_for_status()
-    hits = resp.json().get("hits", [])
-    return [v for v in hits if v.get("duration", 0) >= min_duration]
+    return resp.json().get("hits", [])
 
 
 def _pick_pixabay_video_file(video: dict) -> str | None:
-    """Pick a rendition around 1080p wide, preferring portrait/square framing
-    when Pixabay offers it (unlike Pexels, Pixabay doesn't support an
-    orientation search filter, so most hits are landscape)."""
+    """Pixabay has no orientation filter, so most hits are landscape. The
+    assembler letterboxes those over a blurred copy of themselves, so the
+    useful thing here is the sharpest rendition available (up to ~1080p tall),
+    not the one nearest 1080 wide — that picked 720p and got upscaled ~2.7x."""
     sizes = video.get("videos", {})
     files = [s for s in sizes.values() if s.get("url")]
     if not files:
         return None
-    portrait = [f for f in files if f.get("height", 0) >= f.get("width", 1)]
-    candidates = portrait or files
-    candidates.sort(key=lambda f: abs((f.get("width") or 0) - 1080))
-    return candidates[0]["url"]
+    # Never 4K: the output is 1080x1920, so 2160p is just a slower download and render.
+    usable = [f for f in files if (f.get("height") or 0) <= 1080]
+    if usable:
+        return max(usable, key=lambda f: f.get("height") or 0)["url"]
+    return min(files, key=lambda f: f.get("height") or 0)["url"]
+
+
+def _is_portrait(source: str, video: dict) -> bool:
+    if source == "pexels":
+        return (video.get("height") or 0) >= (video.get("width") or 1)
+    sizes = [s for s in video.get("videos", {}).values() if s.get("url")]
+    return any((s.get("height") or 0) >= (s.get("width") or 1) for s in sizes)
 
 
 def _download(url: str, dest: Path) -> Path:
@@ -148,38 +178,39 @@ def _download(url: str, dest: Path) -> Path:
     return dest
 
 
-def _fetch_from_source(
-    name: str, search_fn, pick_fn, api_key: str, keywords: list[str],
-    min_duration: int, quota: int, clips_dir: Path, used_urls: set[str],
-) -> list[Path]:
-    """Download up to `quota` not-yet-used clips from one source (Pexels or
-    Pixabay), trying each keyword in turn until the quota is met or keywords
-    run out. `used_urls` is shared across sources/calls so the same file
-    link is never downloaded twice."""
-    picked: list[Path] = []
-    for keyword in keywords:
-        if len(picked) >= quota:
-            break
-        try:
-            results = search_fn(keyword, api_key, min_duration)
-        except Exception as e:
-            log.warning("%s search for %r failed: %s", name, keyword, e)
-            continue
-        for video in results:
-            if len(picked) >= quota:
-                break
-            link = pick_fn(video)
-            if not link or link in used_urls:
-                continue
-            dest = clips_dir / f"{name}_{video['id']}.mp4"
+def _fetch_scene_clip(
+    sources: list[tuple], queries: list[str], needed_sec: float, clips_dir: Path, used_ids: set[str],
+    max_queries: int = 6,
+) -> Path | None:
+    """Download one clip for a scene. `sources` is (name, search_fn, pick_fn,
+    api_key) in preference order for this scene. Walks the queries best-first;
+    for each, takes the first not-yet-used result from the preferred source
+    (portrait footage first, and footage at least as long as the scene when
+    possible so it doesn't have to loop), then falls back to the other source."""
+    for query in queries[:max_queries]:
+        for name, search_fn, pick_fn, api_key in sources:
             try:
-                _download(link, dest)
+                results = search_fn(query, api_key)
             except Exception as e:
-                log.warning("download failed for video %s: %s", video.get("id"), e)
+                log.warning("%s search for %r failed: %s", name, query, e)
                 continue
-            used_urls.add(link)
-            picked.append(dest)
-    return picked
+            results = [v for v in results if f"{name}_{v['id']}" not in used_ids and v.get("duration", 0) >= 3]
+            # portrait first, then long-enough first, then the API's own relevance order
+            results.sort(key=lambda v: (not _is_portrait(name, v), v.get("duration", 0) < needed_sec))
+            for video in results[:3]:
+                link = pick_fn(video)
+                if not link:
+                    continue
+                dest = clips_dir / f"{name}_{video['id']}.mp4"
+                try:
+                    _download(link, dest)
+                except Exception as e:
+                    log.warning("download failed for %s video %s: %s", name, video.get("id"), e)
+                    continue
+                used_ids.add(f"{name}_{video['id']}")
+                log.info("scene clip <- %s %r (%s)", name, query, dest.name)
+                return dest
+    return None
 
 
 def _generate_synthetic_fallback(dest: Path, index: int) -> Path:
@@ -195,80 +226,71 @@ def _generate_synthetic_fallback(dest: Path, index: int) -> Path:
     return dest
 
 
-def fetch_visuals(topic: str, script: str, out_dir: Path, n_clips: int, cfg: dict, language: str = "en") -> list[Path]:
+def fetch_visuals(
+    topic: str, script: str, out_dir: Path, n_clips: int, cfg: dict, language: str = "en",
+    scenes: list | None = None, visual_keywords: list[str] | None = None,
+) -> list[Path]:
     """Return exactly n_clips local file paths (video or image) to use as
     background visuals, in the order they should appear in the final video.
+
+    `scenes` (see src.scenes) gives the text spoken during each clip, which
+    drives the per-scene search; without it every scene just gets the topic
+    keywords / niche pool. `visual_keywords` are hand-written per-scene search
+    phrases for this topic, in narrative order.
     """
     clips_dir = out_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     visuals_cfg = cfg.get("visuals", {})
-    min_duration = visuals_cfg.get("min_clip_sec", 6)
     pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
     pixabay_key = os.getenv("PIXABAY_API_KEY", "").strip()
 
-    picked: list[Path] = []
-    used_urls: set[str] = set()
-    keywords = _extract_keywords(topic, script, n=n_clips + len(NICHE_KEYWORDS), language=language)
-
-    # Every online source with a configured key contributes to the same
-    # video (not "Pexels unless it comes up short") — quota is split as
-    # evenly as possible up front, then any shortfall from one source is
-    # offered to the others in a second pass, so the n_clips target is still
-    # hit before falling through to local/synthetic fallback.
-    sources = []
+    all_sources = []
     if pexels_key:
-        sources.append(("pexels", _search_pexels, _pick_video_file, pexels_key))
+        all_sources.append(("pexels", _search_pexels, _pick_video_file, pexels_key))
     else:
         log.info("PEXELS_API_KEY not set — skipping Pexels")
     if pixabay_key:
-        sources.append(("pixabay", _search_pixabay, _pick_pixabay_video_file, pixabay_key))
+        all_sources.append(("pixabay", _search_pixabay, _pick_pixabay_video_file, pixabay_key))
     else:
         log.info("PIXABAY_API_KEY not set — skipping Pixabay")
 
-    if sources:
-        base_quota = n_clips // len(sources)
-        remainder = n_clips % len(sources)
-        for i, (name, search_fn, pick_fn, api_key) in enumerate(sources):
-            quota = base_quota + (1 if i < remainder else 0)
-            got = _fetch_from_source(name, search_fn, pick_fn, api_key, keywords, min_duration, quota, clips_dir, used_urls)
-            picked.extend(got)
-            log.info("%s supplied %d/%d clip(s) (quota %d)", name, len(got), n_clips, quota)
+    picked: list[Path | None] = [None] * n_clips
+    used_ids: set[str] = set()
 
-        # second pass: let other sources cover any shortfall so quotas add up to n_clips
-        for name, search_fn, pick_fn, api_key in sources:
-            if len(picked) >= n_clips:
-                break
-            got = _fetch_from_source(name, search_fn, pick_fn, api_key, keywords, min_duration, n_clips - len(picked), clips_dir, used_urls)
-            if got:
-                picked.extend(got)
-                log.info("%s covered %d additional clip(s) from another source's shortfall", name, len(got))
+    if all_sources:
+        for i in range(n_clips):
+            scene = scenes[i] if scenes and i < len(scenes) else None
+            scene_text = scene.text if scene else f"{topic} {script}"
+            needed = scene.duration if scene else 7.0
+            queries = scene_queries(i, scene_text, visual_keywords)
+            # alternate which source gets first pick, so a video mixes both
+            k = i % len(all_sources)
+            ordered = all_sources[k:] + all_sources[:k]
+            picked[i] = _fetch_scene_clip(ordered, queries, needed, clips_dir, used_ids)
 
-    # --- fill any shortfall from data/assets_local ---
-    if len(picked) < n_clips:
+    # --- fill any scene that got nothing from data/assets_local ---
+    missing = [i for i, p in enumerate(picked) if p is None]
+    if missing:
         fallback_dir = Path(visuals_cfg.get("fallback_dir", "data/assets_local"))
         local_files = [
             p for p in fallback_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in (_IMAGE_EXTS | _VIDEO_EXTS)
             and "music" not in p.parts
-        ]
+        ] if fallback_dir.exists() else []
         if local_files:
-            before = len(picked)
             random.shuffle(local_files)
-            i = 0
-            while len(picked) < n_clips:
-                picked.append(local_files[i % len(local_files)])
-                i += 1
-            log.info("filled %d clip(s) from local fallback %s", len(picked) - before, fallback_dir)
+            for n, i in enumerate(missing):
+                picked[i] = local_files[n % len(local_files)]
+            log.info("filled %d clip(s) from local fallback %s", len(missing), fallback_dir)
 
     # --- absolute last resort: synthesize plain-color stills ---
-    if len(picked) < n_clips:
-        synth_dir = clips_dir
-        missing = n_clips - len(picked)
-        log.warning("no local fallback assets found — synthesizing %d placeholder still(s)", missing)
-        for i in range(missing):
-            picked.append(_generate_synthetic_fallback(synth_dir / f"synthetic_{i}.png", i))
+    still_missing = [i for i, p in enumerate(picked) if p is None]
+    if still_missing:
+        log.warning("no local fallback assets found — synthesizing %d placeholder still(s)", len(still_missing))
+        for i in still_missing:
+            picked[i] = _generate_synthetic_fallback(clips_dir / f"synthetic_{i}.png", i)
 
-    return picked[:n_clips]
+    return [p for p in picked if p is not None]
 
 
 if __name__ == "__main__":

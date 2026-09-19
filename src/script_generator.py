@@ -1,12 +1,13 @@
-"""Generate a script from a topic via the Anthropic API, or signal that the
-job needs a hand-written script when no API key is configured ("manual mode").
+"""Generate a script from a topic (via the Claude Code CLI or the Anthropic API,
+see src/llm.py), or signal that the job needs a hand-written script when
+neither is available ("manual mode").
 """
 
 from __future__ import annotations
 
-import os
 import re
 
+from src import llm
 from src.utils import ManualModeRequired, get_logger, retry_network
 
 log = get_logger("script_generator")
@@ -37,52 +38,41 @@ def _word_count(text: str) -> int:
 
 
 @retry_network(max_attempts=2)
-def _call_anthropic(client, model: str, system_prompt: str, user_message: str) -> str:
-    response = client.messages.create(
-        model=model,
-        max_tokens=600,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    )
-    return "".join(block.text for block in response.content if block.type == "text")
+def _ask(system_prompt: str, user_message: str, cfg: dict) -> str:
+    return llm.complete(system_prompt, user_message, cfg, max_tokens=600)
 
 
-def generate_script(
-    topic: str, language: str = "en", max_words: int = 110, model: str = "claude-sonnet-5"
-) -> str:
-    """Generate a script for `topic` via the Anthropic API.
+def generate_script(topic: str, cfg: dict, language: str = "en") -> str:
+    """Generate a script for `topic`.
 
-    Raises ManualModeRequired if ANTHROPIC_API_KEY is not set — the caller
+    Raises ManualModeRequired if no LLM backend is available — the caller
     (pipeline.py) should then stop the job and ask the user to drop a
     hand-written script into output/<job_slug>/script.txt and re-run with
     --resume.
 
     Retries once with a "shorten it" instruction if the first draft comes
-    back over max_words.
+    back over script.max_words.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
+    max_words = cfg["script"]["max_words"]
+    if llm.backend(cfg) is None:
         raise ManualModeRequired(
-            "ANTHROPIC_API_KEY not set — write your script by hand into "
-            "output/<job_slug>/script.txt and re-run with --resume."
+            "no LLM backend (no ANTHROPIC_API_KEY and no `claude` CLI, or script.provider=manual) — "
+            "write your script by hand into output/<job_slug>/script.txt and re-run with --resume."
         )
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(max_words=max_words, language=language)
+    try:
+        script = _clean_script(_ask(system_prompt, topic, cfg))
 
-    raw = _call_anthropic(client, model, system_prompt, topic)
-    script = _clean_script(raw)
-
-    if _word_count(script) > max_words:
-        log.info("draft was %d words (limit %d) — asking for a shorter rewrite", _word_count(script), max_words)
-        shorten_prompt = (
-            f"{topic}\n\n(Bản trước dài {_word_count(script)} từ, vượt giới hạn {max_words} từ. "
-            f"Viết lại NGẮN HƠN, tối đa {max_words} từ, giữ đúng cấu trúc.)"
-        )
-        raw = _call_anthropic(client, model, system_prompt, shorten_prompt)
-        script = _clean_script(raw)
+        if _word_count(script) > max_words:
+            log.info("draft was %d words (limit %d) — asking for a shorter rewrite", _word_count(script), max_words)
+            shorten_prompt = (
+                f"{topic}\n\n(Bản trước dài {_word_count(script)} từ, vượt giới hạn {max_words} từ. "
+                f"Viết lại NGẮN HƠN, tối đa {max_words} từ, giữ đúng cấu trúc.)"
+            )
+            script = _clean_script(_ask(system_prompt, shorten_prompt, cfg))
+    except llm.LLMUnavailable as e:
+        raise ManualModeRequired(f"LLM call failed ({e}) — write your script by hand instead.") from e
 
     if _word_count(script) > max_words:
         log.warning("script still %d words after retry (limit %d) — using as-is", _word_count(script), max_words)
@@ -93,11 +83,11 @@ def generate_script(
 if __name__ == "__main__":
     from dotenv import load_dotenv
 
+    from src.utils import load_config
+
     load_dotenv()
     try:
-        script = generate_script(
-            "Why does silence after a question make people confess more?", language="en", max_words=110
-        )
+        script = generate_script("Why does silence after a question make people confess more?", load_config())
         print(f"[{_word_count(script)} words]\n{script}")
     except ManualModeRequired as e:
         print(f"Manual mode required: {e}")

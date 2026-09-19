@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from src import music_composer, script_generator, subtitle_burner, video_assembler, visual_fetcher, voice_generator
-from src.utils import ManualModeRequired, PipelineStepError, get_logger, new_job_slug
+from src import scenes as scenes_mod
+from src.utils import ManualModeRequired, PipelineStepError, ffprobe_duration, get_logger, new_job_slug
 
 log = get_logger("pipeline")
 
@@ -50,7 +52,7 @@ def _has_usable_script(script_path: Path) -> bool:
 def _write_placeholder_script(script_path: Path, out_dir: Path) -> None:
     script_path.write_text(
         f"{PLACEHOLDER_MARKER}\n"
-        f"# ANTHROPIC_API_KEY is not set, so this job needs a hand-written script.\n"
+        f"# No script generator is available (no `claude` CLI / ANTHROPIC_API_KEY), so this job needs a hand-written script.\n"
         f"# 1) Delete these comment lines (or the whole file) and paste your script text.\n"
         f'# 2) Re-run:  python main.py single --resume "{out_dir}"\n',
         encoding="utf-8",
@@ -73,18 +75,23 @@ def _pick_music(topic: str, script: str, cfg: dict) -> Path | None:
     picked per topic, zero copyright risk since nothing is sourced online."""
     music_dir = Path(cfg.get("music", {}).get("dir", "data/assets_local/music"))
     try:
-        return music_composer.get_music_for_topic(topic, script, music_dir / "generated")
+        return music_composer.get_music_for_topic(topic, script, music_dir / "generated", library_dir=music_dir)
     except Exception as e:
         log.warning("music synthesis failed (%s) — continuing without background music", e)
         return None
 
 
-def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -> JobResult:
+def run_job(
+    topic: str, language: str, cfg: dict, out_dir: Path | None = None,
+    visual_keywords: list[str] | None = None,
+) -> JobResult:
     """Run the full pipeline for one topic.
 
     Pass `out_dir` to resume a job previously stopped at
     "awaiting_manual_script" (after you've edited its script.txt by hand).
     Otherwise a fresh output/<slug>-<timestamp>/ directory is created.
+    `visual_keywords` are per-scene B-roll search phrases in narrative order
+    (from the topic bank); without them scenes are matched from their own text.
     """
     resuming = out_dir is not None
     if out_dir is None:
@@ -113,10 +120,7 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
             script = script_path.read_text(encoding="utf-8").strip()
             log.info("using existing script.txt (%d words)", len(script.split()))
         else:
-            script = script_generator.generate_script(
-                topic, language=language,
-                max_words=cfg["script"]["max_words"], model=cfg["script"]["anthropic_model"],
-            )
+            script = script_generator.generate_script(topic, cfg, language=language)
             script_path.write_text(script, encoding="utf-8")
         log_data["steps"]["script"] = "ok"
         log_data["script_word_count"] = len(script.split())
@@ -141,19 +145,33 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
     except Exception as e:
         return fail("voice", e)
 
-    # 3. visuals
+    # 3. visuals — one clip per scene, scenes cut at sentence pauses
     try:
-        clips = visual_fetcher.fetch_visuals(topic, script, out_dir, cfg["visuals"]["clips_per_video"], cfg, language=language)
+        audio_duration = ffprobe_duration(voice_path)
+        visuals_cfg = cfg["visuals"]
+        n_scenes = max(
+            visuals_cfg["clips_per_video"],
+            min(math.ceil(audio_duration / visuals_cfg.get("max_scene_sec", 8)), 8),
+        )
+        scenes = scenes_mod.plan_scenes(srt_path, audio_duration, n_scenes)
+        clips = visual_fetcher.fetch_visuals(
+            topic, script, out_dir, len(scenes), cfg, language=language,
+            scenes=scenes, visual_keywords=visual_keywords,
+        )
         log_data["steps"]["visuals"] = "ok"
         log_data["clip_count"] = len(clips)
+        log_data["scenes"] = [
+            {"start": round(s.start, 2), "end": round(s.end, 2), "clip": c.name} for s, c in zip(scenes, clips)
+        ]
     except Exception as e:
         return fail("visuals", e)
 
-    # 4. subtitle
+    # 4. subtitle (+ hook title card and closing CTA)
     try:
         ass_path = subtitle_burner.srt_to_ass(
             srt_path, cfg["subtitle"], out_dir / "voice.ass",
             video_width=cfg["video"]["width"], video_height=cfg["video"]["height"],
+            title=topic, hook_cfg=cfg.get("hook"), duration=audio_duration,
         )
         log_data["steps"]["subtitle"] = "ok"
     except Exception as e:
@@ -163,7 +181,8 @@ def run_job(topic: str, language: str, cfg: dict, out_dir: Path | None = None) -
     try:
         music_path = _pick_music(topic, script, cfg)
         final_path = video_assembler.assemble_video(
-            clips, voice_path, ass_path, music_path, out_dir / "final.mp4", cfg
+            clips, voice_path, ass_path, music_path, out_dir / "final.mp4", cfg,
+            durations=[s.duration for s in scenes],
         )
         log_data["steps"]["assemble"] = "ok"
         log_data["music_used"] = str(music_path) if music_path else None

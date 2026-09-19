@@ -11,9 +11,12 @@ voice:
   # back on edge_tts until the plan is upgraded. Flip to elevenlabs any time
   # after upgrading; the elevenlabs_* keys below are already wired up.
   provider: edge_tts            # edge_tts | elevenlabs
-  edge_voice_en: en-US-GuyNeural
+  # AndrewNeural: warmer / more conversational than GuyNeural. Other good
+  # en-US options: AvaNeural, BrianNeural, EmmaNeural, ChristopherNeural
+  # (all return word-level timing, which the captions depend on).
+  edge_voice_en: en-US-AndrewNeural
   edge_voice_vi: vi-VN-HoaiMyNeural
-  rate: "-15%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
+  rate: "-12%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
   # ElevenLabs (cần ELEVENLABS_API_KEY trong .env + gói trả phí). Đổi giọng:
   # vào elevenlabs.io -> Voice Library -> chọn giọng -> copy Voice ID, dán vào đây.
   elevenlabs_voice_en: "cCYjmrGZaI86GUJ7F2Nn"
@@ -22,9 +25,14 @@ voice:
   elevenlabs_speed: 0.85         # chỉ áp dụng cho elevenlabs — 1.0 = gốc, khoảng hợp lệ ~0.7-1.2
 
 subtitle:
-  font: "Montserrat-Bold"
-  font_size: 52
+  # Family name, not "Montserrat-Bold": libass matches on the font's family
+  # ("Montserrat"), so the PostScript-style name silently fell back to Arial.
+  # style.bold=True in subtitle_burner.py selects the bold weight.
+  font: "Montserrat"
+  font_size: 68
   color: "&H00FFFFFF"           # trắng, định dạng ASS
+  highlight_color: "&H0000D7FF" # vàng — tô tên hiệu ứng ("sunk cost fallacy", ...); bỏ dòng này để tắt
+  max_words_per_caption: 6      # mỗi caption hiện tối đa từng này từ (ngắt theo dấu phẩy trước)
   outline_color: "&H00000000"
   position: "bottom_center"     # bottom_center | middle_center
   # % chiều cao video chừa trống phía dưới cho phụ đề (bottom_center) — phải
@@ -32,20 +40,39 @@ subtitle:
   # YouTube Shorts, TikTok, Reels đều tự vẽ đè lên khoảng dưới cùng video).
   safe_margin_percent: 28
 
+hook:
+  title_card: true               # hiện chủ đề (câu hỏi hook) thật to ở những giây đầu
+  title_sec: 2.8
+  title_font_size: 92
+  cta_text: "Follow Noggora for daily psychology"   # dòng cuối video; để trống "" để tắt
+  cta_sec: 2.5
+  cta_font_size: 56
+
 visuals:
-  clips_per_video: 5
-  min_clip_sec: 6
-  source: pexels                # pexels | local
+  clips_per_video: 5             # số cảnh tối thiểu
+  max_scene_sec: 8               # video dài thì tự tăng số cảnh (tối đa 8) để không cảnh nào lâu hơn ~8s
+  fade_sec: 0.25                 # thời gian crossfade giữa 2 clip
+  pan_zoom: 1.12                 # clip dọc được phóng 12% rồi pan chậm; 1.0 = tắt chuyển động
   fallback_dir: data/assets_local
 
 music:
+  # Bỏ file nhạc royalty-free của bạn vào đây (hoặc vào <dir>/<mood>/ với mood:
+  # mysterious|tense|curious|warm|playful) — có file thì dùng file, không thì tự tổng hợp.
   dir: data/assets_local/music
-  volume_db: -22
+  # Chỉnh cho track tự tổng hợp (mean ~ -29 dB): ~ -31 dB lúc im lặng, tự hạ thêm ~10 dB
+  # khi có giọng đọc (sidechain ducking). Track nhạc thật thường to hơn nhiều -> đặt -15 đến -20.
+  volume_db: -2
 
 branding:
   channel_name: "Noggora"
   watermark: false               # true nếu muốn overlay logo góc màn hình
 
 script:
-  anthropic_model: "claude-sonnet-5"   # override here if you want a cheaper/older model
+  # Ai viết script: auto = dùng ANTHROPIC_API_KEY nếu có, không thì dùng lệnh `claude`
+  # (Claude Code CLI, chạy bằng tài khoản đang đăng nhập, không cần key), không có cả
+  # hai thì chế độ manual.  claude_cli | anthropic_api | manual để ép 1 cách.
+  provider: claude_cli
+  cli_model: "sonnet"                  # alias/model cho `claude --model`
+  cli_timeout_sec: 180
+  anthropic_model: "claude-sonnet-5"   # chỉ dùng khi gọi API bằng key
   max_words: 110

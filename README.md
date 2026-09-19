@@ -55,7 +55,7 @@ cp .env.example .env
 
 | Key | Bắt buộc? | Lấy ở đâu |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Không — thiếu thì pipeline chạy ở **manual script mode** | [console.anthropic.com](https://console.anthropic.com/) |
+| `ANTHROPIC_API_KEY` | Không — viết script mặc định qua lệnh `claude` (Claude Code CLI, tài khoản đã đăng nhập, mục 2). Chỉ cần key nếu đặt `script.provider: anthropic_api` (tính tiền riêng, **không** dùng chung với gói Claude Code) | [console.anthropic.com](https://console.anthropic.com/) |
 | `PEXELS_API_KEY` | Không — thiếu thì dùng riêng `PIXABAY_API_KEY` (nếu có), hoặc ảnh/video dự phòng trong `data/assets_local/` | Free tại [pexels.com/api](https://www.pexels.com/api/) (đăng ký tài khoản → tạo API key, có quyền thương mại) |
 | `PIXABAY_API_KEY` | Không — có cả 2 key thì mỗi video chia đều clip từ Pexels + Pixabay (đa dạng hơn), không bắt buộc phải có key này | Free tại [pixabay.com/api/docs](https://pixabay.com/api/docs/) (đăng ký tài khoản → lấy API key, license cho phép dùng thương mại, không cần credit) |
 | `ELEVENLABS_API_KEY` | Không — chỉ dùng khi đổi `voice.provider: elevenlabs` trong config | [elevenlabs.io](https://elevenlabs.io/) |
@@ -75,16 +75,19 @@ chạy được nhưng thiếu dữ liệu/tiến độ:
 
 | Thư mục/file | Vì sao quan trọng nếu thiếu |
 |---|---|
-| `data/` (cả thư mục) | Chứa `topic_bank.csv` (25 chủ đề viết tay + trạng thái `used_at`), `effects_pool.csv`, `topics.csv`, `topic_bank_meta.json` và `assets_local/` (video nền placeholder). Thiếu thư mục này, `auto` không có chủ đề nào để chọn và sẽ lỗi ngay từ lần chạy đầu trên máy mới |
+| `data/` (cả thư mục) | Chứa `topic_bank.csv` (chủ đề chưa dùng; lô đầu là 25 chủ đề viết tay), `topic_bank_used.csv` (chủ đề đã đăng), `effects_pool.csv`, `topics.csv`, `topic_bank_meta.json` và `assets_local/` (video nền placeholder). Thiếu thư mục này, `auto` không có chủ đề nào để chọn và sẽ lỗi ngay từ lần chạy đầu trên máy mới |
 | `.env` | Chứa toàn bộ API key — không copy thì `auto`/`single` vẫn chạy được (nhờ fallback ở mục 5) nhưng chất lượng thấp hơn (manual script, không B-roll thật) |
 
-Nếu **không** copy `data/topic_bank_meta.json` + `used_at` trong
-`topic_bank.csv`, máy mới sẽ coi như chưa video nào được đăng và có thể chọn
+Nếu **không** copy `data/topic_bank_meta.json` + `topic_bank_used.csv`
+(danh sách chủ đề đã dùng), máy mới sẽ coi như chưa video nào được đăng và có thể chọn
 lại đúng những chủ đề máy cũ đã dùng — không sai kỹ thuật, chỉ là dễ trùng nội
 dung giữa 2 máy nếu cả hai cùng chạy `auto`.
 
 `output/` và `logs/` không cần copy — pipeline tự tạo lại, chỉ mất lịch sử
 video/log cũ (không ảnh hưởng chức năng).
+
+Máy mới cũng cần **cài Claude Code CLI và đăng nhập** (chạy `claude` một lần) thì
+`auto` mới nhờ Claude viết script được; chưa có thì `auto` vẫn chạy bằng bank viết sẵn.
 
 Nếu muốn máy mới **tự chạy mỗi ngày** (mục 2.2), Task Scheduler là cấu hình
 riêng theo từng máy — phải chạy lại
@@ -93,96 +96,81 @@ mới, không có cách "copy" scheduled task từ máy cũ sang.
 
 ---
 
-## 2. Chế độ tự động (zero-argument, mỗi ngày 1 clip khác nhau)
-
-**Đây là cách chạy đơn giản nhất — không cần `ANTHROPIC_API_KEY`, không cần
-nhập topic:**
+## 2. Chế độ `auto` — Claude viết video mới cho hôm nay
 
 ```bash
 python main.py auto
 ```
 
-Lệnh này tự lấy **chủ đề + script kế tiếp chưa dùng** từ
-[data/topic_bank.csv](data/topic_bank.csv) (25 chủ đề tâm lý học tiếng Anh đã
-viết sẵn script, xáo trộn thứ tự sẵn) và chạy hết pipeline ra `final.mp4`.
-Chạy lại lần sau sẽ tự lấy chủ đề *khác*, không lặp, cho đến khi dùng hết cả
-25 thì tự quay vòng lại từ đầu (có log cảnh báo để bạn biết lúc đó nên bổ sung
-thêm chủ đề mới vào file CSV).
+Bạn tự chạy lệnh này khi muốn có video (không cần đặt lịch, không cần nhập
+topic). Mỗi lần chạy:
 
-- Nếu bạn **có** `ANTHROPIC_API_KEY` trong `.env`: `auto` vẫn lấy chủ đề từ
-  bank, nhưng để Anthropic sinh script mới thay vì dùng script viết sẵn —
-  chất lượng/đa dạng cao hơn.
-- `data/topic_bank.csv` hiện chỉ có chủ đề tiếng Anh (kênh chưa đăng tiếng
-  Việt) nên `--lang vi` sẽ không tìm thấy gì để chọn; muốn video tiếng Việt,
-  dùng `single --topic "..." --lang vi` (mục 3) thay vì `auto`.
-- Thêm chủ đề mới vào bank: mở `data/topic_bank.csv`, thêm dòng mới với cột
+1. **Claude viết chủ đề + script + từ khoá tìm hình mới** cho video hôm nay
+   (`src/daily_topic.py`) — không sinh cả lô trước. Dùng lệnh `claude -p`
+   (Claude Code CLI) bằng **tài khoản Claude Code bạn đang đăng nhập**, không
+   cần `ANTHROPIC_API_KEY`; tốn hạn mức của gói, mỗi lần khoảng 20–30 giây.
+2. **Lưu lại ngay và kiểm tra trùng** (mục 2.1) rồi chạy hết pipeline ra `final.mp4`.
+3. Nếu không gọi được Claude (chưa đăng nhập, hết hạn mức, lỗi mạng, hoặc 3 lần
+   liền đều ra bản trùng) → tự dùng chủ đề + script viết sẵn kế tiếp trong
+   [data/topic_bank.csv](data/topic_bank.csv), có log cảnh báo. Ép dùng bank
+   bằng `python main.py auto --bank-only`.
+
+Cách chọn nguồn viết script đổi ở `script.provider` trong `config/settings.yaml`:
+`claude_cli` (mặc định) | `anthropic_api` (cần `ANTHROPIC_API_KEY`, tính tiền
+theo token) | `auto` (API nếu có key, không thì CLI) | `manual`. `single` cũng
+dùng cùng nguồn này để viết script cho topic bạn đưa vào.
+
+Lưu ý: khi chạy bằng CLI, biến `ANTHROPIC_API_KEY` (nếu có trong `.env`) bị bỏ
+qua có chủ ý, để CLI không tính tiền API thay vì dùng gói của bạn.
+
+- `--lang vi` không dùng AI (chỉ tiếng Anh) — muốn video tiếng Việt dùng
+  `single --topic "..." --lang vi` (mục 3).
+- Thêm chủ đề viết tay vào bank: mở `data/topic_bank.csv`, thêm dòng với cột
   `used_at` để trống (id chỉ cần là số chưa dùng).
 
-### 2.1 Không lặp lại chủ đề — tự tạo lô mới mỗi tháng, đúng theo số ngày thật
+### 2.1 Không lặp lại, kể cả nội dung gần giống
 
-- **Chủ đề đã dùng thì không bao giờ được chọn lại**, cho tới khi lô hiện tại
-  hết sạch. `used_at` trong `data/topic_bank.csv` đánh dấu điều đó — `auto`
-  không bao giờ chọn lại 1 dòng đã có `used_at`.
-- Trước mỗi lần chạy, `auto` tự kiểm tra (`topic_bank.ensure_fresh_batch`,
-  theo dõi qua `data/topic_bank_meta.json`): nếu lô hiện tại **hết chủ đề**
-  HOẶC đã **quá số ngày của tháng lúc lô đó bắt đầu** (28/29/30/31 ngày —
-  tính bằng `calendar.monthrange`, không còn cứng "30 ngày" nữa) kể từ lần
-  tạo lô gần nhất (tuỳ điều kiện nào đến trước) → tự thêm 1 lô chủ đề mới vào
-  cuối `topic_bank.csv`, không cần bạn làm gì.
-- **Số chủ đề mỗi lô = số ngày của tháng lúc lô đó được tạo** (vd. lô tạo
-  trong tháng 2 → 28 hoặc 29 chủ đề; tháng có 31 ngày → 31 chủ đề), thay vì
-  cố định 30 như trước — để đúng 1 video/ngày không bị thiếu (tháng 2 dùng
-  hết 30 sẽ thiếu ~2 ngày) hay dư (tháng 31 ngày dùng 30 sẽ refresh sớm 1
-  ngày dù vẫn còn topic cũ).
-- Lô mới lấy từ đâu:
-  - **Có `ANTHROPIC_API_KEY`:** gọi Anthropic 1 lần, xin đủ số chủ đề+script
-    theo đúng số ngày của tháng đó, hoàn toàn mới (kèm danh sách chủ đề đã
-    dùng để tránh trùng) — chất lượng cao nhất.
-  - **Không có key (mặc định hiện tại):** tự ghép từ
-    [data/effects_pool.csv](data/effects_pool.csv) — kho ~60 hiệu ứng tâm lý
-    học có sẵn (tên + cơ chế + ví dụ) chưa dùng ở lô hand-written đầu tiên,
-    ghép qua vài mẫu câu (hook/giải thích/hành động) thành script hoàn chỉnh.
-    Văn phong sẽ khuôn mẫu hơn 25 script tôi viết tay ban đầu, nhưng vẫn đúng
-    cấu trúc hook→insight→hành động, đủ dùng để đăng.
-- 25 chủ đề viết tay (lô 1, tiếng Anh) + 60 hiệu ứng trong effects_pool.csv
-  (đủ cho ~2 lô nữa, cũng tiếng Anh) cho khoảng **3 tháng** không lặp, không
-  cần đụng gì cả. Sau đó, nếu vẫn chưa có `ANTHROPIC_API_KEY`, cần bổ sung
-  thêm dòng vào `effects_pool.csv` (hoặc nhờ tôi viết thêm) — nếu không, hệ
-  thống sẽ quay vòng lại từ đầu (có log cảnh báo rõ ràng khi việc này xảy ra)
-  thay vì dừng hẳn.
-- **Giới hạn hiện tại:** kho tự sinh theo template (`effects_pool.csv`) chỉ
-  hỗ trợ tiếng Anh, và `data/topic_bank.csv` hiện không còn chủ đề tiếng Việt
-  nào (đã gỡ bỏ vì kênh chưa đăng tiếng Việt). Muốn có lại chủ đề tiếng Việt
-  trong bank, cần `ANTHROPIC_API_KEY` (batch tự sinh chỉ tạo tiếng Anh, phải
-  gọi thủ công theo hướng khác) hoặc nhờ tôi viết tay bổ sung.
+Mọi video AI viết đều được **lưu ngay lúc sinh ra** (không chờ render xong, để
+video lỗi giữa chừng vẫn không bị sinh lại vào hôm sau) vào
+`data/topic_bank_used.csv`: chủ đề, script, từ khoá hình, tên hiệu ứng tâm lý
+(cột `effect`) và giờ `used_at`. Script cũng nằm trong `output/<job>/script.txt`
+— render lại cùng script bằng `python main.py single --resume "output/<job>"`.
 
-### 2.2 Tự động chạy mỗi ngày, không cần bấm gì (Windows Task Scheduler)
+Trước khi nhận một bản Claude viết, `daily_topic.find_duplicate` so với **toàn bộ
+video đã làm và cả bank viết tay**, và từ chối nếu:
 
-Đã thiết lập sẵn 1 scheduled task tên **"Noggora Daily Video"**, chạy
-`python main.py auto` mỗi ngày lúc **08:00** (chỉ khi máy đang đăng nhập —
-không cần lưu mật khẩu, không chạy khi máy tắt/khoá màn hình lâu).
+- trùng chủ đề (không phân biệt hoa/thường, dấu câu);
+- **cùng hiệu ứng tâm lý** — so tên hiệu ứng (kể cả viết khác đi như "sunk cost"
+  và "sunk cost fallacy"), và cả khi hiệu ứng đó đã được nêu tên trong script cũ
+  của bank viết tay;
+- tiêu đề chỉ là viết lại tiêu đề cũ (tỉ lệ giống chuỗi ≥ 0.72 hoặc ≥ 2/3 từ khoá trùng);
+- nội dung script trùng ≥ 32% từ khoá với script cũ (video khác nhau thật sự chỉ
+  chạm khoảng 18% khi đo trên dữ liệu hiện có).
 
-```powershell
-# Kiểm tra task
-Get-ScheduledTask -TaskName "Noggora Daily Video" | Get-ScheduledTaskInfo
+Khi bị từ chối, Claude được báo đúng lý do ("effect X đã dùng ở video Y") và
+được yêu cầu chọn hiệu ứng + tình huống khác; thử tối đa 3 lần, hết lượt thì
+quay về bank. Ngoài ra danh sách chủ đề/hiệu ứng cũ cũng được đưa vào prompt
+ngay từ đầu, và mỗi ngày prompt gợi ý 1 mảng tâm lý khác nhau (xoay vòng 10 mảng)
+nên các video liên tiếp không dồn vào cùng một chủ đề.
 
-# Chạy thử ngay (không cần chờ tới giờ)
-Start-ScheduledTask -TaskName "Noggora Daily Video"
+Với **bank viết tay** (dự phòng): chủ đề đã dùng bị xoá khỏi
+`data/topic_bank.csv` và chuyển sang `topic_bank_used.csv`. Khi bank cạn thì
+`topic_bank.ensure_fresh_batch` bù thêm 1 lô (số chủ đề = số ngày của tháng): từ
+Anthropic nếu có `ANTHROPIC_API_KEY`, không thì ghép từ
+[data/effects_pool.csv](data/effects_pool.csv) (~60 hiệu ứng, văn phong khuôn
+mẫu hơn). Hết cả hai thì quay vòng lại chủ đề cũ (có log cảnh báo).
 
-# Đổi giờ chạy / cài lại (idempotent, chạy lại là ghi đè giờ mới)
-powershell -ExecutionPolicy Bypass -File setup_scheduled_task.ps1 -Time "20:00"
+### 2.2 Chạy hằng ngày (tuỳ chọn)
 
-# Xoá task (không tự động sinh video nữa)
-Unregister-ScheduledTask -TaskName "Noggora Daily Video" -Confirm:$false
-```
+Hiện bạn chạy tay nên **không cần** Task Scheduler. Nếu sau này muốn tự chạy:
+`powershell -ExecutionPolicy Bypass -File setup_scheduled_task.ps1 -Time "08:00"`
+(tạo task "Noggora Daily Video", chạy `run_auto.ps1` → `main.py auto`, log ở
+`logs/auto.log`). Lưu ý: task chạy trong môi trường Windows khác với terminal
+của bạn — cần kiểm tra `claude` vẫn đăng nhập được ở đó, nếu không `auto` sẽ tự
+rơi về bank.
 
-Log mỗi lần chạy (thành công hay lỗi) được ghi vào
-[logs/auto.log](logs/auto.log) (file này tự tạo, append theo thời gian) —
-mở file này để xem video hôm đó đã ra chưa, hoặc lỗi ở bước nào nếu có.
-
-Video mới luôn nằm trong `output/<slug>-<timestamp>/final.mp4` — không có
-thư mục "video hôm nay" cố định, hãy sort `output/` theo thời gian sửa đổi để
-lấy video mới nhất.
+Video mới luôn nằm trong `output/<slug>-<timestamp>/final.mp4` — hãy sort
+`output/` theo thời gian sửa đổi để lấy video mới nhất.
 
 ---
 
@@ -196,7 +184,9 @@ python main.py single --topic "Why does silence after a question make people con
 python main.py batch --file data/topics.csv --limit 10
 ```
 
-Nếu không có `ANTHROPIC_API_KEY`, lệnh trên sẽ dừng ở bước script và in ra:
+`single`/`batch` nhờ Claude viết script cho topic bạn đưa (cùng nguồn với `auto`,
+xem `script.provider`). Chỉ khi không có nguồn nào dùng được (chưa cài/đăng nhập
+`claude`, không có key, hoặc `provider: manual`) thì lệnh dừng ở bước script và in ra:
 
 ```
 [1/1] "Why does silence after a question mak..." -> awaiting manual script: output/<job_slug>/script.txt ✋
@@ -225,14 +215,32 @@ python main.py batch --file data/topics.csv --resume
 
 ```
 output/<slug-topic>-<timestamp>/
-├── script.txt       # lời thoại (do Anthropic sinh hoặc bạn dán tay)
+├── script.txt       # lời thoại (do Claude viết, lấy từ bank, hoặc bạn dán tay)
 ├── voice.mp3         # giọng đọc edge-tts
-├── voice.srt          # phụ đề gốc, timestamp theo từng nhóm ~4 từ
-├── voice.ass           # phụ đề đã style (font/màu/vị trí theo config/settings.yaml)
-├── clips/                # B-roll đã tải (Pexels) hoặc copy từ data/assets_local/
+├── voice.srt          # phụ đề gốc: mỗi cue là 1 cụm ≤ 6 từ (ngắt theo dấu phẩy), timing theo từng từ
+├── voice.ass           # phụ đề đã style + title card mở đầu + CTA cuối (theo config/settings.yaml)
+├── clips/                # B-roll đã tải (Pexels/Pixabay) hoặc copy từ data/assets_local/
 ├── final.mp4              # ✅ video hoàn chỉnh, sẵn sàng đăng
-└── job_log.json            # log từng bước (ok/failed/awaiting_manual_script) + số liệu ước tính
+├── title.txt               # tiêu đề để copy khi đăng
+└── job_log.json            # log từng bước + danh sách cảnh (khoảng thời gian → clip nào)
 ```
+
+### 4.1 Video được dựng như thế nào
+
+- **Cảnh theo câu:** `src/scenes.py` chia giọng đọc thành ~5 cảnh, cắt ở khoảng
+  lặng giữa các câu (câu quá dài mới cắt giữa câu), độ dài các cảnh gần bằng nhau.
+  Mỗi cảnh có 1 clip B-roll riêng, tìm theo nội dung cảnh đó.
+- **Từ khoá tìm hình**, theo thứ tự ưu tiên: (1) cột `visual_keywords` trong
+  `topic_bank.csv` (cụm từ cách nhau bằng `;`, mỗi cảnh 1 cụm, theo thứ tự
+  hook → cơ chế → ví dụ → hành động); (2) vật cụ thể được nhắc trong câu (movie,
+  coffee, clock... — bảng `_CONCEPT_MAP` trong `visual_fetcher.py`); (3) từ khoá
+  chung về tâm lý. Cảnh lẻ lấy Pexels, cảnh chẵn lấy Pixabay (nguồn kia bù nếu thiếu).
+- **Nhìn thống nhất:** cùng 1 bộ chỉnh màu (hơi tối, ngả tím) + vignette cho mọi
+  clip; clip dọc pan chậm; clip ngang hiện trong khung vuông trên nền mờ; các clip
+  crossfade 0.25s.
+- **Hook:** chủ đề (câu hỏi) hiện to ở 2.8s đầu trên nền tối hơn; 2.5s cuối có dòng CTA.
+- **Caption:** cụm ≤ 6 từ, cỡ chữ 68, tên hiệu ứng ("sunk cost fallacy"...) tô vàng.
+- **Âm thanh:** nhạc nền tự hạ khi có giọng đọc (sidechain ducking).
 
 Mỗi lần chạy tạo 1 thư mục riêng theo slug + timestamp — không bao giờ ghi đè
 job cũ, nên bạn luôn có thể debug/tái sử dụng asset của 1 job cụ thể.
@@ -246,10 +254,10 @@ của mỗi dòng) để `--resume` biết chính xác job nào cần tiếp t�
 
 | Bước | Không có key/mạng lỗi | Kết quả |
 |---|---|---|
-| Script (Anthropic) | Không có `ANTHROPIC_API_KEY` | `single`/`batch`: dừng job, yêu cầu dán script tay. `auto`: tự lấy script viết sẵn từ `data/topic_bank.csv`, không dừng |
+| Script (Claude) | `claude` CLI chưa đăng nhập / hết hạn mức / lỗi, hoặc 3 lần liền ra bản trùng | `single`/`batch`: dừng job, yêu cầu dán script tay. `auto`: tự lấy script viết sẵn từ `data/topic_bank.csv`, không dừng |
 | Giọng đọc (edge-tts) | Lỗi mạng thoáng qua (`NoAudioReceived`, ...) | Tự retry tối đa 3 lần (exponential backoff) |
-| Visual (Pexels + Pixabay) | Không có `PEXELS_API_KEY`/`PIXABAY_API_KEY` hoặc không đủ kết quả | Chia đều số clip cần cho mọi nguồn đang có key (vd. 5 clip + cả 2 key → 3 Pexels + 2 Pixabay trong cùng 1 video); nguồn nào thiếu quota thì nguồn còn lại bù; vẫn thiếu thì lấy ngẫu nhiên từ `data/assets_local/videos/`; nếu thư mục đó cũng trống, tự sinh ảnh nền màu trơn bằng ffmpeg — **không bao giờ trả về danh sách rỗng** |
-| Nhạc nền | Luôn tự tổng hợp, không phụ thuộc key/mạng | Xem mục 5.1 |
+| Visual (Pexels + Pixabay) | Không có `PEXELS_API_KEY`/`PIXABAY_API_KEY` hoặc không đủ kết quả | Các cảnh xen kẽ giữa các nguồn đang có key (5 cảnh + cả 2 key → 3 Pexels + 2 Pixabay); mỗi cảnh thử lần lượt vài từ khoá, nguồn này không có thì nguồn kia bù; cảnh nào vẫn thiếu thì lấy ngẫu nhiên từ `data/assets_local/videos/`; nếu thư mục đó cũng trống, tự sinh ảnh nền màu trơn bằng ffmpeg — **không bao giờ trả về danh sách rỗng** |
+| Nhạc nền | Luôn có, không phụ thuộc key/mạng | Dùng file nhạc của bạn nếu có, không thì tự tổng hợp — xem mục 5.1 |
 
 `data/assets_local/videos/*.mp4` (gradient tối chuyển động chậm + grain/vignette)
 hiện là **placeholder tự sinh bằng ffmpeg** — không lấy từ nguồn nào khác nên
@@ -259,11 +267,19 @@ cảnh quay/người thật, đăng ký `PEXELS_API_KEY` và/hoặc `PIXABAY_API
 
 ### 5.1 Nhạc nền — tự chọn theo "tâm trạng" chủ đề, tự sinh 100% (không bản quyền)
 
-`src/music_composer.py` **không tải nhạc từ đâu cả** — nó tự tổng hợp nhạc
-bằng ffmpeg (3 tần số hợp âm + tremolo/lowpass/echo) nên **chắc chắn không
-dính bản quyền** (không có cách nào "tìm nhạc free trên mạng khớp chủ đề" mà
-đảm bảo an toàn bản quyền 100% — kể cả nhạc gắn nhãn "free" vẫn có thể bị
-Content ID nhầm hoặc đổi điều khoản).
+**Ưu tiên nhạc thật của bạn:** nếu có file `.mp3/.wav/.m4a/.ogg` trong
+`data/assets_local/music/` (hoặc `data/assets_local/music/<mood>/` cho mood cụ
+thể), pipeline dùng file đó (chọn ngẫu nhiên). Chỉ dùng nhạc bạn có giấy phép
+sử dụng thương mại. Track thật thường to hơn track tự tổng hợp — nhớ giảm
+`music.volume_db` (khoảng -15 đến -20).
+
+Nếu không có file nào, `src/music_composer.py` **không tải nhạc từ đâu cả** —
+nó tự tổng hợp bằng ffmpeg 1 bản ambient pad (chuỗi 4 hợp âm, stereo, nhiều
+giọng lệch nhẹ + hài âm, nền noise, echo/reverb) nên **chắc chắn không dính
+bản quyền** (không có cách nào "tìm nhạc free trên mạng khớp chủ đề" mà đảm
+bảo an toàn bản quyền 100% — kể cả nhạc gắn nhãn "free" vẫn có thể bị Content
+ID nhầm hoặc đổi điều khoản). Chất lượng của bản tự tổng hợp chỉ ở mức nền
+ambient — nhạc thật sẽ hay hơn.
 
 Mỗi chủ đề được phân loại vào 1 trong 5 "tâm trạng" dựa trên từ khóa trong
 topic/script (`_MOOD_KEYWORDS` trong `music_composer.py`):
@@ -277,7 +293,7 @@ topic/script (`_MOOD_KEYWORDS` trong `music_composer.py`):
 | `playful` | đồ vật, tình huống hài hước nhẹ | vui, nhịp nhanh |
 
 Mỗi mood chỉ tổng hợp 1 lần rồi cache vào
-`data/assets_local/music/generated/mood_<tên>.mp3` để không phải sinh lại mỗi
+`data/assets_local/music/generated/mood_<tên>_v2.mp3` để không phải sinh lại mỗi
 lần chạy trùng mood. Muốn nhạc "riêng biệt" cho từng video (không chỉ theo
 mood) thì cần 1 dịch vụ AI sinh nhạc trả phí (vd. Suno) — ngoài phạm vi hiện
 tại vì phải cân nhắc thêm chi phí + điều khoản bản quyền của dịch vụ đó.
@@ -287,9 +303,10 @@ tại vì phải cân nhắc thêm chi phí + điều khoản bản quyền củ
 ## 6. Cấu hình (`config/settings.yaml`)
 
 Chỉnh trực tiếp file này để đổi: độ phân giải/fps, giới hạn thời lượng, voice
-(`edge_voice_en` / `edge_voice_vi`), font/màu/vị trí phụ đề, số clip mỗi
-video, độ dài tối thiểu mỗi clip, thư mục nhạc + volume (dB), model Anthropic
-dùng để sinh script.
+(`edge_voice_en` / `edge_voice_vi`, hiện là `en-US-AndrewNeural`), font/màu/cỡ
+chữ/tô vàng và số từ tối đa mỗi caption, title card + CTA (`hook:`), số cảnh
+tối đa, độ dài crossfade và mức pan (`visuals:`), thư mục nhạc + volume (dB),
+nguồn viết script (`script.provider`, `cli_model`, `cli_timeout_sec`).
 
 ---
 
@@ -331,7 +348,8 @@ python -m src.voice_generator    # sinh voice.mp3 + voice.srt mẫu vào output/
 python -m src.subtitle_burner    # convert srt mẫu -> ass đã style
 python -m src.video_assembler    # ghép ass + voice mẫu với 3 ảnh nền màu trơn -> final.mp4
 python -m src.visual_fetcher     # test fetch Pexels/fallback local
-python -m src.script_generator   # test sinh script qua Anthropic (hoặc manual mode nếu thiếu key)
+python -m src.script_generator   # test sinh script cho 1 topic mẫu (hoặc manual mode nếu không có nguồn nào)
+python -m src.daily_topic        # Claude viết thử chủ đề + script hôm nay (kèm kiểm tra trùng, không lưu, không render)
 python -m src.topic_bank         # xem chủ đề kế tiếp mà `auto` sẽ chọn (tự tạo lô mới nếu cần)
 python -m src.music_composer     # xem mood được chọn cho vài chủ đề mẫu + sinh thử 1 track
 python -m src.pipeline           # chạy full 1 job mẫu end-to-end

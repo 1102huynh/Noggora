@@ -6,6 +6,7 @@ foundation every other module in `src/` imports.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -118,6 +119,20 @@ def ffprobe_duration(path: Path) -> float:
         capture_output=True, text=True, check=True,
     )
     return float(result.stdout.strip())
+
+
+def ffprobe_dimensions(path: Path) -> tuple[int, int]:
+    """Return (width, height) of the first video stream (or of an image)."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    stream = json.loads(result.stdout)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
 
 
 def load_config(config_path: str | Path = "config/settings.yaml") -> dict[str, Any]:

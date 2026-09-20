@@ -21,6 +21,20 @@ SYSTEM_PROMPT_TEMPLATE = (
     "thoại sẽ được đọc."
 )
 
+# Shared with daily_topic (which asks for the description in the same call as the script).
+DESCRIPTION_RULES = (
+    "Format: 2-3 short lines: (1) a line that restates the hook so it stops the scroll, (2) one line with the "
+    "takeaway from the video, (3) a short question that invites comments. Then a blank line, then 6-8 "
+    "hashtags on ONE line: broad ones (#psychology #psychologyfacts #mindset) plus 2-3 specific to this video's "
+    "effect and situation, and #shorts. Under 350 characters in total. Plain text, no markdown, no emojis, no "
+    "claims of curing or diagnosing anything."
+)
+
+_DESCRIPTION_SYSTEM = (
+    "You write the caption for a short psychology video posted on TikTok, YouTube Shorts and Instagram Reels "
+    "by the channel Noggora. " + DESCRIPTION_RULES + " Reply with the caption only."
+)
+
 _MARKDOWN_CHARS = re.compile(r"[*_#`~]")
 
 
@@ -78,6 +92,19 @@ def generate_script(topic: str, cfg: dict, language: str = "en") -> str:
         log.warning("script still %d words after retry (limit %d) — using as-is", _word_count(script), max_words)
 
     return script
+
+
+def generate_description(topic: str, script: str, cfg: dict) -> str | None:
+    """Post caption (text + hashtags) for a finished script, or None if no LLM
+    backend is available or the call fails — the video is still fine without it."""
+    if llm.backend(cfg) is None:
+        return None
+    try:
+        text = _ask(_DESCRIPTION_SYSTEM, f"Video title: {topic}\n\nVideo script:\n{script}", cfg).strip()
+    except llm.LLMUnavailable as e:
+        log.warning("could not generate a post description (%s)", e)
+        return None
+    return text.strip('"').strip() or None
 
 
 if __name__ == "__main__":

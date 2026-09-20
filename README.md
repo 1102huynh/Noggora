@@ -105,15 +105,24 @@ python main.py auto
 Bạn tự chạy lệnh này khi muốn có video (không cần đặt lịch, không cần nhập
 topic). Mỗi lần chạy:
 
-1. **Claude viết chủ đề + script + từ khoá tìm hình mới** cho video hôm nay
-   (`src/daily_topic.py`) — không sinh cả lô trước. Dùng lệnh `claude -p`
-   (Claude Code CLI) bằng **tài khoản Claude Code bạn đang đăng nhập**, không
-   cần `ANTHROPIC_API_KEY`; tốn hạn mức của gói, mỗi lần khoảng 20–30 giây.
+1. **Claude viết chủ đề + script + mô tả bài đăng + từ khoá tìm hình mới** cho
+   video hôm nay (`src/daily_topic.py`) — không sinh cả lô trước. Dùng lệnh
+   `claude -p` (Claude Code CLI) bằng **tài khoản Claude Code bạn đang đăng
+   nhập**, không cần `ANTHROPIC_API_KEY`; tốn hạn mức của gói, mỗi lần khoảng
+   20–30 giây.
 2. **Lưu lại ngay và kiểm tra trùng** (mục 2.1) rồi chạy hết pipeline ra `final.mp4`.
-3. Nếu không gọi được Claude (chưa đăng nhập, hết hạn mức, lỗi mạng, hoặc 3 lần
-   liền đều ra bản trùng) → tự dùng chủ đề + script viết sẵn kế tiếp trong
-   [data/topic_bank.csv](data/topic_bank.csv), có log cảnh báo. Ép dùng bank
-   bằng `python main.py auto --bank-only`.
+3. **In sẵn tiêu đề + mô tả (caption kèm hashtag) để copy vào bài đăng** ở cuối
+   lệnh, đồng thời lưu ở `output/<job>/post.txt` (`title.txt` và
+   `description.txt` là 2 phần riêng). `single`/`batch` cũng tạo mô tả cho topic
+   bạn đưa vào.
+4. Nếu Claude không viết được (chưa đăng nhập, hết hạn mức, lỗi mạng, hoặc 3 lần
+   liền đều ra bản trùng) → **dừng và báo lỗi rõ**, không lặng lẽ lấy chủ đề từ
+   file. Muốn tự dùng chủ đề viết sẵn trong [data/topic_bank.csv](data/topic_bank.csv)
+   khi Claude lỗi thì đặt `script.fallback_to_bank: true`; hoặc chủ động chạy
+   `python main.py auto --bank-only` bất cứ lúc nào.
+
+Nội dung do AI viết — nên đọc lướt script + mô tả trước khi đăng (một số hiệu ứng
+tâm lý còn tranh luận về cơ chế, Claude có thể kể theo 1 giả thuyết như thể đã chắc chắn).
 
 Cách chọn nguồn viết script đổi ở `script.provider` trong `config/settings.yaml`:
 `claude_cli` (mặc định) | `anthropic_api` (cần `ANTHROPIC_API_KEY`, tính tiền
@@ -221,7 +230,9 @@ output/<slug-topic>-<timestamp>/
 ├── voice.ass           # phụ đề đã style + title card mở đầu + CTA cuối (theo config/settings.yaml)
 ├── clips/                # B-roll đã tải (Pexels/Pixabay) hoặc copy từ data/assets_local/
 ├── final.mp4              # ✅ video hoàn chỉnh, sẵn sàng đăng
-├── title.txt               # tiêu đề để copy khi đăng
+├── post.txt                # tiêu đề + mô tả (caption + hashtag) để copy khi đăng
+├── title.txt               # riêng tiêu đề
+├── description.txt         # riêng mô tả
 └── job_log.json            # log từng bước + danh sách cảnh (khoảng thời gian → clip nào)
 ```
 

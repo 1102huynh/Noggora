@@ -32,6 +32,7 @@ class JobResult:
     failed_step: str | None = None
     error: str | None = None
     title: str | None = None  # set when status == "done" — ready to paste as the YouTube title
+    description: str | None = None  # post caption + hashtags, ready to paste (None if it couldn't be generated)
 
 
 def _now_iso() -> str:
@@ -83,7 +84,7 @@ def _pick_music(topic: str, script: str, cfg: dict) -> Path | None:
 
 def run_job(
     topic: str, language: str, cfg: dict, out_dir: Path | None = None,
-    visual_keywords: list[str] | None = None,
+    visual_keywords: list[str] | None = None, description: str | None = None,
 ) -> JobResult:
     """Run the full pipeline for one topic.
 
@@ -92,6 +93,8 @@ def run_job(
     Otherwise a fresh output/<slug>-<timestamp>/ directory is created.
     `visual_keywords` are per-scene B-roll search phrases in narrative order
     (from the topic bank); without them scenes are matched from their own text.
+    `description` is the post caption if one was already written alongside the
+    script; otherwise one is generated after the video is done.
     """
     resuming = out_dir is not None
     if out_dir is None:
@@ -189,20 +192,31 @@ def run_job(
     except Exception as e:
         return fail("assemble", e)
 
-    # 6. log
+    # 6. post text — best effort, the video is already done either way
+    if not description:
+        description = script_generator.generate_description(topic, script, cfg)
+
+    # 7. log
     log_data["finished_at"] = _now_iso()
     log_data["status"] = "done"
     log_data["final_video"] = str(final_path)
+    log_data["has_description"] = bool(description)
     _write_job_log(out_dir, log_data)
 
     # The topic is already phrased as a hook question, which is exactly what
-    # works as a YouTube Shorts/TikTok title — write it out next to the video
-    # so it's there to copy-paste when posting, without having to scroll back
-    # through terminal output or re-open script.txt.
-    title_path = out_dir / "title.txt"
-    title_path.write_text(topic, encoding="utf-8")
+    # works as a YouTube Shorts/TikTok title — write it out next to the video,
+    # with the caption, so both are there to copy-paste when posting without
+    # scrolling back through terminal output or re-opening script.txt.
+    (out_dir / "title.txt").write_text(topic, encoding="utf-8")
+    post = f"TITLE\n{topic}\n"
+    if description:
+        (out_dir / "description.txt").write_text(description, encoding="utf-8")
+        post += f"\nDESCRIPTION\n{description}\n"
+    (out_dir / "post.txt").write_text(post, encoding="utf-8")
 
-    return JobResult(status="done", out_dir=out_dir, final_video=final_path, title=topic)
+    return JobResult(
+        status="done", out_dir=out_dir, final_video=final_path, title=topic, description=description,
+    )
 
 
 if __name__ == "__main__":

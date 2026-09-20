@@ -19,7 +19,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from src import llm, topic_bank
+from src import llm, script_generator, topic_bank
 from src.utils import get_logger
 
 log = get_logger("daily_topic")
@@ -41,7 +41,7 @@ _AREAS = [
 _SYSTEM_TEMPLATE = """You write scripts for "Noggora", a faceless psychology short-video channel (TikTok / YouTube Shorts / Reels). Videos are 30-40 seconds, read aloud by a text-to-speech voice, with burned-in captions.
 
 Produce ONE new video. Reply with a single JSON object and nothing else (no markdown fences, no commentary):
-{{"effect": "...", "topic": "...", "script": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}}
+{{"effect": "...", "topic": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}}
 
 effect: the name of the psychological effect, bias or principle the video is about, as psychologists name it (for example "sunk cost fallacy").
 
@@ -52,6 +52,8 @@ script: English, {min_words}-{max_words} words, spoken and conversational, not a
   2. The middle names the effect and explains it with one concrete everyday example.
   3. The last sentence gives the viewer something they can do or a new way to see it right away.
 Rules: plain sentences of 6-25 words, ending in periods or question marks, with commas where a speaker would pause. Spell numbers out as words. No emojis, hashtags, markdown, stage directions, or headings. Only well-established findings: never invent a study, statistic or researcher; if you are unsure of the details of a study, describe the effect in general terms instead.
+
+description: the caption to paste under the post on TikTok / YouTube Shorts / Instagram Reels, in English. {description_rules}
 
 visual_keywords: exactly 5 short stock-footage search phrases (2-4 words each, plain English) for Pexels/Pixabay, one per part of the script in order (hook, explanation, example, insight, action). Each must describe something concrete a camera can film (people, places, objects), never an abstract concept, and never a person's name or a brand.
 
@@ -150,6 +152,7 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
     effect = str(data.get("effect", "")).strip().strip('"')
     topic = str(data.get("topic", "")).strip().strip('"')
     script = re.sub(r"[*_#`~]", "", str(data.get("script", ""))).strip().strip('"')
+    description = str(data.get("description", "")).replace("\r", "").strip()
     keywords = [str(k).strip() for k in (data.get("visual_keywords") or []) if str(k).strip()]
 
     if not effect or not topic or not script:
@@ -163,7 +166,7 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
         raise ValueError(f"only {len(keywords)} visual_keywords")
     return {
         "effect": effect, "topic": topic, "language": "en", "script": script,
-        "visual_keywords": ";".join(keywords[:5]),
+        "description": description, "visual_keywords": ";".join(keywords[:5]),
     }
 
 
@@ -190,7 +193,10 @@ def generate_daily_entry(
     min_words = max(60, max_words - 35)
     known = topic_bank.all_known_rows(bank_path, used_path)
     area = _AREAS[date.today().toordinal() % len(_AREAS)]
-    system = _SYSTEM_TEMPLATE.format(min_words=min_words, max_words=max_words, exclude=_describe_known(known))
+    system = _SYSTEM_TEMPLATE.format(
+        min_words=min_words, max_words=max_words, exclude=_describe_known(known),
+        description_rules=script_generator.DESCRIPTION_RULES,
+    )
 
     user = f"Today's focus area: {area}. Write today's video."
     for attempt in range(1, max_attempts + 1):

@@ -42,7 +42,7 @@ def _days_in_month(dt: datetime) -> int:
 # narrative order (hook, mechanism, example, ..., action) — see visual_fetcher.
 # effect: name of the psychological effect the script is about (filled for
 # AI-generated topics; used to refuse a later topic that covers the same one).
-_BANK_FIELDNAMES = ["id", "topic", "language", "script", "used_at", "visual_keywords", "effect"]
+_BANK_FIELDNAMES = ["id", "topic", "language", "script", "used_at", "visual_keywords", "effect", "description"]
 _EFFECTS_FIELDNAMES = ["id", "name", "mechanism", "example", "hook_subject", "topic", "used_batch", "visual_keywords"]
 
 # Do/does-free so they're grammatically safe regardless of whether an
@@ -237,6 +237,7 @@ def record_generated_used(
         "id": str(max(ids, default=0) + 1), "topic": entry["topic"], "language": entry["language"],
         "script": entry["script"], "used_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "visual_keywords": entry.get("visual_keywords", ""), "effect": entry.get("effect", ""),
+        "description": entry.get("description", ""),
     }])
 
 

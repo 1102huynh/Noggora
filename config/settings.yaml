@@ -74,5 +74,8 @@ script:
   provider: claude_cli
   cli_model: "sonnet"                  # alias/model cho `claude --model`
   cli_timeout_sec: 180
+  # false: `auto` mà Claude không viết được thì DỪNG và báo lỗi (không lặng lẽ lấy chủ đề từ file).
+  # true: tự dùng chủ đề viết sẵn trong data/topic_bank.csv. `auto --bank-only` luôn dùng file.
+  fallback_to_bank: false
   anthropic_model: "claude-sonnet-5"   # chỉ dùng khi gọi API bằng key
   max_words: 110

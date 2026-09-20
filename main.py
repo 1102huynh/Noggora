@@ -32,7 +32,13 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
     short_topic = topic if len(topic) <= 40 else topic[:37] + "..."
     if result.status == "done":
         print(f'[{i}/{total}] "{short_topic}" -> {result.final_video} ✅')
-        print(f"    Title (copy for YouTube): {result.title}")
+        print(f"\n--- COPY FOR THE POST (also saved in {result.out_dir / 'post.txt'}) ---")
+        print(f"Title:\n{result.title}")
+        if result.description:
+            print(f"\nDescription:\n{result.description}")
+        else:
+            print("\n(No description generated — Claude wasn't available. Title only.)")
+        print("---")
     elif result.status == "awaiting_manual_script":
         print(f'[{i}/{total}] "{short_topic}" -> awaiting manual script: {result.out_dir / "script.txt"} ✋')
     else:
@@ -42,9 +48,10 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
 def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
     """Zero-argument video for today. Preferred: ask Claude (the `claude` CLI
     on your Claude Code login, or the Anthropic API if a key is set) to write
-    a brand-new topic + script + footage keywords, so nothing is pre-generated
-    in bulk. If that isn't available or fails, fall back to the next unused
-    pre-written topic from the bank (topping the bank up when it runs low)."""
+    a brand-new topic + script + post caption + footage keywords, so nothing is
+    pre-generated in bulk. If that isn't possible the run stops with an error,
+    unless script.fallback_to_bank is on (or --bank-only is passed), in which
+    case the next unused pre-written topic from the bank is used instead."""
     bank_path = Path(args.bank)
 
     entry = None
@@ -53,6 +60,13 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
         entry = daily_topic.generate_daily_entry(cfg, bank_path)
         generated = entry is not None
         if entry is None:
+            if not cfg["script"].get("fallback_to_bank", False):
+                log.error(
+                    "Claude could not produce a new topic + script (see warnings above). Check that `claude` "
+                    "is logged in (run `claude` once) and retry; or run `main.py auto --bank-only` to use a "
+                    "pre-written topic."
+                )
+                return 1
             log.warning("could not generate a fresh script — using the pre-written topic bank instead")
 
     if entry is None:
@@ -76,7 +90,10 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
         log.info("saved to %s — script also in %s", topic_bank.DEFAULT_USED_PATH, out_dir / "script.txt")
 
     visual_keywords = [k.strip() for k in (entry.get("visual_keywords") or "").split(";") if k.strip()]
-    result = run_job(entry["topic"], entry["language"], cfg, out_dir=out_dir, visual_keywords=visual_keywords or None)
+    result = run_job(
+        entry["topic"], entry["language"], cfg, out_dir=out_dir,
+        visual_keywords=visual_keywords or None, description=entry.get("description") or None,
+    )
     if result.status == "done" and not generated:
         topic_bank.mark_used(bank_path, entry["id"])
     _print_result(1, 1, entry["topic"], result)

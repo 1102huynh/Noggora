@@ -135,6 +135,18 @@ def ffprobe_dimensions(path: Path) -> tuple[int, int]:
     return int(stream["width"]), int(stream["height"])
 
 
+def ffprobe_audio_channels(path: Path) -> int:
+    """Channel count of the first audio stream."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=channels", "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return int(result.stdout.strip().splitlines()[0])
+
+
 def load_config(config_path: str | Path = "config/settings.yaml") -> dict[str, Any]:
     """Load settings.yaml relative to the project root."""
     path = Path(config_path)

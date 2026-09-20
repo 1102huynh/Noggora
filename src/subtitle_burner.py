@@ -9,6 +9,7 @@ over the first seconds) and a closing call-to-action line.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -47,9 +48,9 @@ def _parse_ass_color(hex_color: str) -> pysubs2.Color:
     return pysubs2.Color(int(rr, 16), int(gg, 16), int(bb, 16), int(aa, 16))
 
 
-def _highlight_keyword(text: str, color_tag: str) -> str:
-    """Wrap the first "<name> effect"-style phrase in `text` in a colour override."""
-    words = text.split(" ")
+def _keyword_span(words: list[str]) -> tuple[int, int] | None:
+    """Indices (first, last) of the first "<name> effect"-style phrase in
+    `words`, or None. Walks back from the keyword over up to 2 name words."""
     for idx, word in enumerate(words):
         if not _KEYWORD_RE.fullmatch(word.strip(".,;:!?\"'").lower()):
             continue
@@ -60,20 +61,96 @@ def _highlight_keyword(text: str, color_tag: str) -> str:
                 break
             start -= 1
         if start == idx:  # bare "effect" with no name before it in this phrase
-            return text
-        trailing = ""
-        while words[idx] and words[idx][-1] in ".,;:!?":
-            trailing = words[idx][-1] + trailing
-            words[idx] = words[idx][:-1]
-        words[start] = "{\\c" + color_tag + "&}" + words[start]
-        words[idx] = words[idx] + "{\\r}" + trailing
-        return " ".join(words)
-    return text
+            return None
+        return start, idx
+    return None
+
+
+def _color_tag(ass_color: str) -> str:
+    """"&HAABBGGRR" -> the "&HBBGGRR" form that a \\c override takes (no alpha byte)."""
+    return "&H" + ass_color.upper().replace("&H", "").rstrip("&").zfill(8)[2:]
+
+
+def _highlight_keyword(text: str, color_tag: str) -> str:
+    """Wrap the first "<name> effect"-style phrase in `text` in a colour override."""
+    words = text.split(" ")
+    span = _keyword_span(words)
+    if span is None:
+        return text
+    start, idx = span
+    trailing = ""
+    while words[idx] and words[idx][-1] in ".,;:!?":
+        trailing = words[idx][-1] + trailing
+        words[idx] = words[idx][:-1]
+    words[start] = "{\\c" + color_tag + "&}" + words[start]
+    words[idx] = words[idx] + "{\\r}" + trailing
+    return " ".join(words)
+
+
+def _karaoke_events(
+    line, phrase: dict, effect_tag: str | None, active_tag: str,
+) -> list[pysubs2.SSAEvent]:
+    """One event per spoken word: the whole phrase stays on screen and only the
+    word being said is coloured `active_tag` (so nothing builds up letter by
+    letter — the layout is identical in every event). The named effect, if
+    any, keeps `effect_tag` colour throughout."""
+    words = [w["t"] for w in phrase["words"]]
+    span = _keyword_span(words)
+    events = []
+    for k, w in enumerate(phrase["words"]):
+        parts = []
+        for j, word in enumerate(words):
+            if j == k:
+                parts.append("{\\c" + active_tag + "&}" + word + "{\\r}")
+            elif span and effect_tag and span[0] <= j <= span[1]:
+                parts.append("{\\c" + effect_tag + "&}" + word + "{\\r}")
+            else:
+                parts.append(word)
+        start_ms = int(w["s"] * 1000)
+        end_ms = line.end if k == len(words) - 1 else int(phrase["words"][k + 1]["s"] * 1000)
+        if k == 0:
+            start_ms = line.start
+        events.append(pysubs2.SSAEvent(
+            start=start_ms, end=max(end_ms, start_ms + 1), style="Default",
+            text=("{\\fad(70,0)}" if k == 0 else "") + " ".join(parts),
+        ))
+    return events
+
+
+def write_cover_ass(title: str, out_path: Path, style_cfg: dict, cover_cfg: dict, width: int, height: int, brand: str) -> Path:
+    """ASS for the cover image: brand name on top, the title big in the middle."""
+    subs = pysubs2.SSAFile()
+    subs.info["PlayResX"] = str(width)
+    subs.info["PlayResY"] = str(height)
+
+    def make(size: int, align: int, marginv: int, color: str, outline: float) -> pysubs2.SSAStyle:
+        st = pysubs2.SSAStyle()
+        st.fontname = style_cfg.get("font", "Arial")
+        st.fontsize = size
+        st.primarycolor = _parse_ass_color(color)
+        st.outlinecolor = _parse_ass_color("&H00000000")
+        st.borderstyle = 1
+        st.outline = outline
+        st.shadow = 2.0
+        st.bold = True
+        st.alignment = align
+        st.marginl = st.marginr = 90
+        st.marginv = marginv
+        return st
+
+    subs.styles["Title"] = make(cover_cfg.get("title_font_size", 104), 5, 0, "&H00FFFFFF", 7.0)
+    subs.styles["Brand"] = make(cover_cfg.get("brand_font_size", 54), 8, 220, style_cfg.get("active_word_color", "&H0000D7FF"), 4.0)
+    subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Brand", text=brand.upper()))
+    subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Title", text=title.replace("\n", " ")))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    subs.save(str(out_path))
+    return out_path
 
 
 def srt_to_ass(
     srt_path: Path, style_cfg: dict, out_path: Path, video_width: int = 1080, video_height: int = 1920,
     title: str | None = None, hook_cfg: dict | None = None, duration: float | None = None,
+    words_path: Path | None = None,
 ) -> Path:
     """Convert srt_path -> out_path (.ass) styled per style_cfg (subtitle: block of settings.yaml).
 
@@ -83,6 +160,8 @@ def srt_to_ass(
 
     `title` + `hook_cfg` add the opening title card and closing CTA line
     (`duration` = total video length, needed to place the CTA at the end).
+    `words_path` (voice.words.json) enables word-by-word highlighting when
+    subtitle.karaoke is on.
     """
     subs = pysubs2.load(str(srt_path), encoding="utf-8")
     subs.info["PlayResX"] = str(video_width)
@@ -117,14 +196,27 @@ def srt_to_ass(
     subs.styles["Default"] = style
 
     highlight = style_cfg.get("highlight_color")
-    color_tag = None
-    if highlight:
-        digits = highlight.upper().replace("&H", "").rstrip("&").zfill(8)
-        color_tag = "&H" + digits[2:]  # \c takes &HBBGGRR& (no alpha byte)
-    for line in subs:
+    color_tag = _color_tag(highlight) if highlight else None
+
+    phrases = None
+    if style_cfg.get("karaoke", False) and words_path is not None and Path(words_path).exists():
+        phrases = json.loads(Path(words_path).read_text(encoding="utf-8"))
+        if len(phrases) != len(subs):  # timing file from a different render — don't guess
+            log.warning("%s has %d captions but the srt has %d — skipping word highlighting",
+                        words_path, len(phrases), len(subs))
+            phrases = None
+    active_tag = _color_tag(style_cfg.get("active_word_color", "&H0000D7FF"))
+
+    karaoke_events: list[pysubs2.SSAEvent] = []
+    for i, line in enumerate(list(subs)):
         line.style = "Default"
+        if phrases is not None:
+            karaoke_events.extend(_karaoke_events(line, phrases[i], color_tag, active_tag))
+            continue
         text = _highlight_keyword(line.text, color_tag) if color_tag else line.text
         line.text = "{\\fad(70,0)}" + text
+    if phrases is not None:
+        subs.events[:] = karaoke_events
 
     hook_cfg = hook_cfg or {}
     font = style.fontname
@@ -153,7 +245,9 @@ def srt_to_ass(
         cta_style = pysubs2.SSAStyle()
         cta_style.fontname = font
         cta_style.fontsize = hook_cfg.get("cta_font_size", 56)
-        cta_style.primarycolor = _parse_ass_color(style_cfg.get("highlight_color", "&H00FFFFFF"))
+        cta_style.primarycolor = _parse_ass_color(
+            style_cfg.get("active_word_color", style_cfg.get("highlight_color", "&H00FFFFFF"))
+        )
         cta_style.outlinecolor = _parse_ass_color("&H00000000")
         cta_style.borderstyle = 1
         cta_style.outline = 4.0

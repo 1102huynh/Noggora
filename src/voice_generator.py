@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -114,31 +115,41 @@ def _chunk_words(words: list[str], max_words: int) -> list[list[str]]:
     return merged
 
 
-def _cues_to_srt(cues: list, script: str, max_words: int = 6) -> str:
+def _cues_to_srt(cues: list, script: str, max_words: int = 6) -> tuple[str, list[dict]]:
     """Render cues as SRT, one caption per short phrase (<= max_words) of each
     sentence of `script`. Text is the script's own wording/punctuation; each
     phrase is timed from when its first word is spoken to when its last word
     finishes (held on screen until the next phrase of the same sentence
     starts, so captions don't flicker between phrases).
+
+    Also returns, per caption, the spoken timing of each of its words
+    ([{"start", "end", "words": [{"t", "s", "e"}, ...]}, ...], seconds) —
+    the SRT can't carry that, and word-by-word caption highlighting needs it.
     """
-    entries: list[tuple[timedelta, timedelta, str, int]] = []  # start, end, text, sentence idx
+    entries: list[tuple[timedelta, timedelta, str, int, list[dict]]] = []  # start, end, text, sentence idx, words
     for s_idx, (sentence, group) in enumerate(_group_cues_by_sentence(cues, script)):
         words = sentence.split()
         offset = 0
         for chunk in _chunk_words(words, max_words):
             first = group[min(offset, len(group) - 1)]
             last = group[min(offset + len(chunk) - 1, len(group) - 1)]
-            entries.append((first.start, last.end, " ".join(chunk), s_idx))
+            word_timing = []
+            for j, word in enumerate(chunk):
+                cue = group[min(offset + j, len(group) - 1)]
+                word_timing.append({"t": word, "s": cue.start.total_seconds(), "e": cue.end.total_seconds()})
+            entries.append((first.start, last.end, " ".join(chunk), s_idx, word_timing))
             offset += len(chunk)
 
     lines = []
-    for i, (start, end, text, s_idx) in enumerate(entries):
+    timings = []
+    for i, (start, end, text, s_idx, word_timing) in enumerate(entries):
         if i + 1 < len(entries) and entries[i + 1][3] == s_idx:
             end = max(end, entries[i + 1][0])
         lines.append(
             f"{i + 1}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}\n"
         )
-    return "\n".join(lines)
+        timings.append({"start": start.total_seconds(), "end": end.total_seconds(), "words": word_timing})
+    return "\n".join(lines), timings
 
 
 @retry_network(max_attempts=3)
@@ -247,8 +258,9 @@ async def generate_voice(
         cues = await _synthesize_edge(script, voice, rate, mp3_path)
 
     max_caption_words = (cfg or {}).get("subtitle", {}).get("max_words_per_caption", 6)
-    srt_text = _cues_to_srt(cues, script, max_caption_words)
+    srt_text, word_timings = _cues_to_srt(cues, script, max_caption_words)
     srt_path.write_text(srt_text, encoding="utf-8")
+    (out_dir / "voice.words.json").write_text(json.dumps(word_timings, ensure_ascii=False), encoding="utf-8")
 
     duration = ffprobe_duration(mp3_path)
     video_cfg = (cfg or {}).get("video", {})

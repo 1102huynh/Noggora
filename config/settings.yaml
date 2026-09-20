@@ -6,23 +6,29 @@ video:
   min_duration_sec: 25
 
 voice:
-  # ElevenLabs Free plan blocks TTS via API entirely (402 paid_plan_required,
-  # confirmed against this account even for a voice added to "My Voices") —
-  # back on edge_tts until the plan is upgraded. Flip to elevenlabs any time
-  # after upgrading; the elevenlabs_* keys below are already wired up.
-  provider: edge_tts            # edge_tts | elevenlabs
+  # ElevenLabs Free plan: TTS via API works ONLY with the account's premade voices
+  # (George, Roger, Charlie, ...). Library voices (like the old cCYjmr... id) get
+  # 402 paid_plan_required. Free quota is 10,000 characters/month (~15 videos).
+  # If it fails or runs out, set provider back to edge_tts — nothing else to change.
+  provider: elevenlabs          # edge_tts | elevenlabs
   # AndrewNeural: warmer / more conversational than GuyNeural. Other good
   # en-US options: AvaNeural, BrianNeural, EmmaNeural, ChristopherNeural
   # (all return word-level timing, which the captions depend on).
   edge_voice_en: en-US-AndrewNeural
   edge_voice_vi: vi-VN-HoaiMyNeural
   rate: "-12%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
-  # ElevenLabs (cần ELEVENLABS_API_KEY trong .env + gói trả phí). Đổi giọng:
-  # vào elevenlabs.io -> Voice Library -> chọn giọng -> copy Voice ID, dán vào đây.
-  elevenlabs_voice_en: "cCYjmrGZaI86GUJ7F2Nn"
-  elevenlabs_voice_vi: "cCYjmrGZaI86GUJ7F2Nn"   # model multilingual đọc được tiếng Việt qua cùng voice
+  # ElevenLabs (cần ELEVENLABS_API_KEY trong .env). Giọng premade dùng được ở gói free:
+  #   George JBFqnCBsd6RMkjVDRZzb (ấm, kể chuyện) | Roger CwhRBWXzGAHq8TQ4Fs17 (trầm, thoải mái)
+  #   Charlie IKne3meq5aSn9XLyUdCD (trầm, năng lượng) | Sarah EXAVITQu4vr4xnSDxMaL (nữ, chín chắn)
+  # Xem hết: GET https://api.elevenlabs.io/v1/voices. Voice trong Voice Library cần gói trả phí.
+  elevenlabs_voice_en: "JBFqnCBsd6RMkjVDRZzb"
+  elevenlabs_voice_vi: "JBFqnCBsd6RMkjVDRZzb"   # model multilingual đọc được tiếng Việt qua cùng voice
   elevenlabs_model: "eleven_multilingual_v2"
-  elevenlabs_speed: 0.85         # chỉ áp dụng cho elevenlabs — 1.0 = gốc, khoảng hợp lệ ~0.7-1.2
+  # 1.0 = tốc độ gốc, khoảng hợp lệ ~0.7-1.2. ĐÃ ĐO cả video với giọng George, script 105 từ:
+  #   1.0 -> 35.2s | 0.85 -> 44.1s (chậm hơn ~25%, vì cả quãng ngắt cũng dãn ra)
+  # Script 110 từ ở 0.85 sẽ ~46s, vượt max_duration_sec (45s; chỉ cảnh báo, không cắt).
+  # Muốn nhanh hơn một chút thì 0.9 (~40s ước tính); chậm hơn 0.85 thì hạ script.max_words.
+  elevenlabs_speed: 0.85
 
 subtitle:
   # Family name, not "Montserrat-Bold": libass matches on the font's family
@@ -31,7 +37,9 @@ subtitle:
   font: "Montserrat"
   font_size: 68
   color: "&H00FFFFFF"           # trắng, định dạng ASS
-  highlight_color: "&H0000D7FF" # vàng — tô tên hiệu ứng ("sunk cost fallacy", ...); bỏ dòng này để tắt
+  karaoke: true                 # từ đang được đọc đổi màu (cả cụm luôn hiện, không hiện dần); false = caption tĩnh
+  active_word_color: "&H0000D7FF"   # vàng — từ đang đọc (và màu dòng CTA cuối video)
+  highlight_color: "&H00FFC850" # xanh nhạt — tên hiệu ứng ("sunk cost fallacy", ...) luôn tô; bỏ dòng này để tắt
   max_words_per_caption: 6      # mỗi caption hiện tối đa từng này từ (ngắt theo dấu phẩy trước)
   outline_color: "&H00000000"
   position: "bottom_center"     # bottom_center | middle_center
@@ -63,6 +71,23 @@ music:
   # khi có giọng đọc (sidechain ducking). Track nhạc thật thường to hơn nhiều -> đặt -15 đến -20.
   volume_db: -2
 
+cover:
+  enabled: true                  # tạo cover.png (khung mở đầu + tên kênh + tiêu đề) để chọn làm ảnh bìa
+  frame_sec: 1.0                 # lấy khung hình ở giây thứ mấy của cảnh đầu
+  title_font_size: 104
+  brand_font_size: 54
+
+audio:
+  target_lufs: -14               # âm lượng tổng của video (chuẩn của TikTok/Shorts/Reels); mọi giọng đọc đều được đưa về mức này
+
+sfx:
+  enabled: true                  # bật/tắt toàn bộ hiệu ứng âm thanh
+  transitions: false             # tiếng whoosh ở mỗi chỗ chuyển clip — TẮT vì nghe chói tai; true để bật lại
+  # (tiếng "hit" trầm khi title card hiện vẫn bật; muốn bỏ nốt thì đặt enabled: false)
+  dir: data/assets_local/sfx     # bỏ whoosh.* / hit.* (wav/mp3/...) của bạn vào đây để dùng thay bản tự tổng hợp
+  volume_db: -14
+  hit_volume_db: -12
+
 branding:
   channel_name: "Noggora"
   watermark: false               # true nếu muốn overlay logo góc màn hình
@@ -77,5 +102,8 @@ script:
   # false: `auto` mà Claude không viết được thì DỪNG và báo lỗi (không lặng lẽ lấy chủ đề từ file).
   # true: tự dùng chủ đề viết sẵn trong data/topic_bank.csv. `auto --bank-only` luôn dùng file.
   fallback_to_bank: false
+  # Sau khi viết, cho Claude rà soát độ chính xác 1 lượt nữa (thêm ~20s): câu nào còn tranh cãi thì viết
+  # lại dè dặt hơn, số liệu/nghiên cứu không kiểm chứng được thì bỏ. Ghi chú lưu ở output/<job>/factcheck.txt.
+  fact_check: true
   anthropic_model: "claude-sonnet-5"   # chỉ dùng khi gọi API bằng key
   max_words: 110

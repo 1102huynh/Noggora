@@ -178,6 +178,22 @@ def _describe_known(rows: list[dict], limit: int = 150) -> str:
     return "\n".join(lines) or "(none yet)"
 
 
+def _fact_checked(entry: dict, cfg: dict) -> dict:
+    """Run the accuracy pass; on a revision, swap in the corrected script and
+    caption. `fact_check_notes` records what was found (written to the job's
+    factcheck.txt by main.py)."""
+    result = script_generator.fact_check(entry["topic"], entry["script"], entry.get("description", ""), cfg)
+    entry["fact_check"] = result["verdict"]
+    entry["fact_check_notes"] = result["issues"]
+    if result["verdict"] == "revised":
+        log.info("fact-check revised the script: %s", "; ".join(result["issues"]) or "(no notes)")
+        entry["script"] = result["script"]
+        entry["description"] = result["description"]
+    else:
+        log.info("fact-check: %s%s", result["verdict"], f" — {'; '.join(result['issues'])}" if result["issues"] else "")
+    return entry
+
+
 def generate_daily_entry(
     cfg: dict, bank_path: Path = topic_bank.DEFAULT_BANK_PATH, used_path: Path = topic_bank.DEFAULT_USED_PATH,
     max_attempts: int = 3,
@@ -205,7 +221,7 @@ def generate_daily_entry(
             reason = find_duplicate(entry, known)
             if reason is None:
                 log.info("generated today's video [%s] (%s): %s", entry["effect"], area, entry["topic"])
-                return entry
+                return _fact_checked(entry, cfg)
             raise ValueError(f"REJECTED as a repeat: {reason}")
         except llm.LLMUnavailable as e:
             log.warning("LLM unavailable (%s) — falling back to the pre-written bank", e)

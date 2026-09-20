@@ -15,10 +15,12 @@ Look & feel, all done inside one filter graph:
 
 from __future__ import annotations
 
+import itertools
 import subprocess
 from pathlib import Path
 
-from src.utils import ffprobe_dimensions, ffprobe_duration, get_logger
+from src import sfx, subtitle_burner
+from src.utils import ffprobe_audio_channels, ffprobe_dimensions, ffprobe_duration, get_logger
 
 log = get_logger("video_assembler")
 
@@ -82,6 +84,39 @@ def _clip_filter(i: int, clip: Path, width: int, height: int, fps: int, seg_sec:
     )
 
 
+def make_cover(clip: Path, title: str, out_path: Path, cfg: dict) -> Path:
+    """A 1080x1920 cover image (for the platform's cover/thumbnail picker): a
+    frame of the opening scene, in the video's colour grade, dimmed, with the
+    channel name on top and the title big in the middle."""
+    video_cfg = cfg["video"]
+    width, height, fps = video_cfg["width"], video_cfg["height"], video_cfg["fps"]
+    cover_cfg = cfg.get("cover", {})
+    zoom = float(cfg.get("visuals", {}).get("pan_zoom", 1.12))
+
+    ass_path = subtitle_burner.write_cover_ass(
+        title, out_path.with_suffix(".ass"), cfg["subtitle"], cover_cfg, width, height,
+        brand=cfg.get("branding", {}).get("channel_name", ""),
+    )
+    graph = (
+        _clip_filter(0, clip, width, height, fps, 6.0, zoom)
+        + f";[v0]{_GRADE},drawbox=x=0:y=0:w=iw:h=ih:color=black@0.42:t=fill,"
+        f"ass='{_escape_ffmpeg_filter_path(ass_path)}':fontsdir='{_escape_ffmpeg_filter_path(_FONTS_DIR)}'[out]"
+    )
+    seek = 0.0 if clip.suffix.lower() in _IMAGE_EXTS else float(cover_cfg.get("frame_sec", 1.0))
+    for attempt_seek in (seek, 0.0):  # a very short clip can't seek that far in
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-ss", f"{attempt_seek}", "-i", str(clip), "-filter_complex", graph,
+             "-map", "[out]", "-frames:v", "1", str(out_path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and out_path.exists():
+            break
+    else:
+        raise RuntimeError(f"ffmpeg failed making the cover:\n{result.stderr[-1500:]}")
+    ass_path.unlink(missing_ok=True)
+    return out_path
+
+
 def assemble_video(
     clips: list[Path],
     audio_path: Path,
@@ -134,10 +169,37 @@ def assemble_video(
     voice_idx = n
     args += ["-i", str(audio_path)]
 
+    next_input = voice_idx + 1
     music_idx = None
     if music_path is not None:
-        music_idx = voice_idx + 1
+        music_idx = next_input
+        next_input += 1
         args += ["-stream_loop", "-1", "-t", f"{audio_duration:.3f}", "-i", str(music_path)]
+
+    # --- sound effects: a whoosh centred on each crossfade, a hit under the title card ---
+    sfx_cfg = cfg.get("sfx", {})
+    sfx_inputs: list[tuple[int, list[float], float]] = []  # (input index, start times, volume dB)
+    if sfx_cfg.get("enabled", False):
+        sfx_dir = Path(sfx_cfg.get("dir", "data/assets_local/sfx"))
+        transitions = [t for t in itertools.accumulate(durations[:-1])]
+        plan = [
+            (
+                "whoosh",
+                [max(t - 0.3, 0.0) for t in transitions] if sfx_cfg.get("transitions", False) else [],
+                float(sfx_cfg.get("volume_db", -14)),
+            ),
+            ("hit", [0.0] if hook_sec > 0 else [], float(sfx_cfg.get("hit_volume_db", -12))),
+        ]
+        for name, times, vol in plan:
+            if not times:
+                continue
+            try:
+                args += ["-i", str(sfx.get_sfx(name, sfx_dir))]
+            except Exception as e:  # sfx are decoration — never fail the video over them
+                log.warning("skipping %s sfx: %s", name, e)
+                continue
+            sfx_inputs.append((next_input, times, vol))
+            next_input += 1
 
     # --- video: per-clip framing, crossfade chain, shared grade, hook dim, subtitles ---
     filter_parts = [
@@ -165,12 +227,23 @@ def assemble_video(
     chain += f",ass='{ass_escaped}':fontsdir='{fontsdir_escaped}'"
     filter_parts.append(f"[{last}]{chain}[vout]")
 
-    # --- audio: voice always; music (faded, and ducked under the voice) if provided ---
+    # --- audio: voice always; music (faded, ducked under the voice) and sfx if provided ---
+    # The TTS voice is mono, the music and sfx are stereo. Left alone, amix takes
+    # the FIRST input's layout: mono voice + stereo music came out as a mono
+    # mix, and adding a stereo sfx branch flipped it to stereo with the default
+    # mono->stereo upmix, which drops the voice by 3 dB. Duplicate the mono
+    # voice into both channels at full level so the mix is stereo either way.
+    if ffprobe_audio_channels(audio_path) == 1:
+        voice_prep = "aresample=44100,pan=stereo|c0=c0|c1=c0"
+    else:
+        voice_prep = "aresample=44100,aformat=channel_layouts=stereo"
+
+    mix_inputs: list[str] = []
     if music_idx is not None:
         music_cfg = cfg.get("music", {})
         volume_db = music_cfg.get("volume_db", -2)
         fade_out_start = max(audio_duration - 1.5, 0.0)
-        filter_parts.append(f"[{voice_idx}:a]aresample=44100,asplit=2[voice_a][voice_sc]")
+        filter_parts.append(f"[{voice_idx}:a]{voice_prep},asplit=2[voice_a][voice_sc]")
         filter_parts.append(
             f"[{music_idx}:a]aresample=44100,volume={volume_db}dB,"
             f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out_start:.3f}:d=1.5[music_pre]"
@@ -178,15 +251,47 @@ def assemble_video(
         filter_parts.append(
             "[music_pre][voice_sc]sidechaincompress=threshold=0.03:ratio=4:attack=40:release=600[music_a]"
         )
-        # normalize=0: amix otherwise divides every input by the input count,
-        # which silently halved (-6 dB) the voice. alimiter guards the sum.
+        mix_inputs = ["[voice_a]", "[music_a]"]
+    elif sfx_inputs:
+        filter_parts.append(f"[{voice_idx}:a]{voice_prep}[voice_a]")
+        mix_inputs = ["[voice_a]"]
+
+    sfx_labels: list[str] = []
+    for idx, times, vol in sfx_inputs:
+        base = f"[{idx}:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol}dB"
+        if len(times) > 1:
+            split = "".join(f"[s{idx}_{k}]" for k in range(len(times)))
+            filter_parts.append(f"{base},asplit={len(times)}{split}")
+        for k, t in enumerate(times):
+            ms = int(t * 1000)
+            label = f"[d{idx}_{k}]"
+            if len(times) > 1:
+                filter_parts.append(f"[s{idx}_{k}]adelay={ms}|{ms}{label}")
+            else:
+                filter_parts.append(f"{base},adelay={ms}|{ms}{label}")
+            sfx_labels.append(label)
+    if sfx_labels:
         filter_parts.append(
-            "[voice_a][music_a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-            "alimiter=limit=0.95[aout]"
+            f"{''.join(sfx_labels)}amix=inputs={len(sfx_labels)}:duration=longest:dropout_transition=0:normalize=0[sfx]"
         )
-        audio_map = "[aout]"
+        mix_inputs.append("[sfx]")
+
+    # Final loudness: different TTS voices come out at very different levels
+    # (ElevenLabs measured ~4 dB quieter than edge-tts), and platforms play
+    # around -14 LUFS. loudnorm brings every video there with a true-peak
+    # ceiling; it works at 192 kHz internally, hence the resample back.
+    target = float(cfg.get("audio", {}).get("target_lufs", -14))
+    loudnorm = f"loudnorm=I={target}:TP=-1.5:LRA=9,aresample=44100"
+    if len(mix_inputs) > 1:
+        # normalize=0: amix otherwise divides every input by the input count,
+        # which silently halved (-6 dB) the voice.
+        filter_parts.append(
+            f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0:normalize=0,"
+            f"{loudnorm}[aout]"
+        )
     else:
-        audio_map = f"{voice_idx}:a"
+        filter_parts.append(f"[{voice_idx}:a]{voice_prep},{loudnorm}[aout]")
+    audio_map = "[aout]"
 
     filter_complex = ";".join(filter_parts)
 

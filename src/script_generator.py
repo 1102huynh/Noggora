@@ -5,6 +5,7 @@ neither is available ("manual mode").
 
 from __future__ import annotations
 
+import json
 import re
 
 from src import llm
@@ -91,7 +92,65 @@ def generate_script(topic: str, cfg: dict, language: str = "en") -> str:
     if _word_count(script) > max_words:
         log.warning("script still %d words after retry (limit %d) — using as-is", _word_count(script), max_words)
 
+    check = fact_check(topic, script, "", cfg)
+    if check["verdict"] == "revised":
+        log.info("fact-check revised the script: %s", "; ".join(check["issues"]) or "(no notes)")
+        script = check["script"]
+
     return script
+
+
+_FACTCHECK_SYSTEM = """You are a careful fact-checker for popular-psychology short videos. You receive a video's title, its spoken script and its post caption. Check every claim against well-established findings.
+
+- Solid, well-supported claims: keep them exactly.
+- Claims that are contested, oversimplified, or where the mechanism is still debated (competing explanations, failed replications, effects that shrink under scrutiny): rewrite just that sentence so it is accurate but still simple and spoken, for example "one explanation is", "researchers still debate why", "in some studies".
+- Any study, number or researcher you cannot confirm: remove it or make it general. Never add new studies or statistics.
+- Keep the structure (hook, effect plus example, something to do), the conversational tone, plain sentences of 6-25 words ending in periods or question marks, numbers spelled out, and the length close to the original and NEVER above MAX_WORDS words (the video has a hard time limit). The title and the effect stay the same.
+- If the caption repeats a contested claim, fix it too, keeping its format (short lines, blank line, hashtags on one line).
+
+Reply with ONE JSON object and nothing else:
+{"verdict": "ok" or "revised", "issues": ["one short note per problem you found; empty if none"], "script": "...", "description": "..."}
+If the verdict is "ok", return the script and description unchanged."""
+
+
+def fact_check(topic: str, script: str, description: str, cfg: dict) -> dict:
+    """Second-opinion pass over a generated script (and caption).
+
+    Returns {"verdict": "ok" | "revised" | "skipped", "issues": [...], "script", "description"}.
+    "skipped" (disabled, no backend, call failed, or an unusable answer) always
+    carries the ORIGINAL script/description — a broken check must never break or
+    corrupt the video.
+    """
+    original = {"verdict": "skipped", "issues": [], "script": script, "description": description}
+    if not cfg["script"].get("fact_check", True) or llm.backend(cfg) is None:
+        return original
+    max_words = cfg["script"]["max_words"]
+    system = _FACTCHECK_SYSTEM.replace("MAX_WORDS", str(max_words))
+    user = f"Title: {topic}\n\nScript:\n{script}\n\nCaption:\n{description or '(none)'}"
+    try:
+        text = _ask(system, user, cfg)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise ValueError("no JSON object in the answer")
+        data = json.loads(match.group(0))
+        verdict = "revised" if str(data.get("verdict", "")).lower() == "revised" else "ok"
+        issues = [str(i).strip() for i in (data.get("issues") or []) if str(i).strip()]
+        if verdict == "ok":
+            return {"verdict": "ok", "issues": issues, "script": script, "description": description}
+
+        new_script = _clean_script(str(data.get("script", "")))
+        new_desc = str(data.get("description", "")).replace("\r", "").strip() or description
+        old_words, new_words = _word_count(script), _word_count(new_script)
+        if not new_script or not (0.75 * old_words <= new_words <= 1.25 * old_words) or new_words > max_words:
+            raise ValueError(
+                f"revised script has {new_words} words vs {old_words} (limit {max_words}) — keeping the original"
+            )
+        if not new_script.rstrip().endswith((".", "!", "?")):
+            raise ValueError("revised script does not end with sentence punctuation")
+        return {"verdict": "revised", "issues": issues, "script": new_script, "description": new_desc}
+    except (llm.LLMUnavailable, ValueError, json.JSONDecodeError) as e:
+        log.warning("fact-check skipped (%s) — keeping the script as written", e)
+        return original
 
 
 def generate_description(topic: str, script: str, cfg: dict) -> str | None:

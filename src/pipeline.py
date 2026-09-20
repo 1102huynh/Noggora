@@ -33,6 +33,7 @@ class JobResult:
     error: str | None = None
     title: str | None = None  # set when status == "done" — ready to paste as the YouTube title
     description: str | None = None  # post caption + hashtags, ready to paste (None if it couldn't be generated)
+    cover: Path | None = None  # cover/thumbnail image (None if it couldn't be made)
 
 
 def _now_iso() -> str:
@@ -175,6 +176,7 @@ def run_job(
             srt_path, cfg["subtitle"], out_dir / "voice.ass",
             video_width=cfg["video"]["width"], video_height=cfg["video"]["height"],
             title=topic, hook_cfg=cfg.get("hook"), duration=audio_duration,
+            words_path=out_dir / "voice.words.json",
         )
         log_data["steps"]["subtitle"] = "ok"
     except Exception as e:
@@ -192,7 +194,13 @@ def run_job(
     except Exception as e:
         return fail("assemble", e)
 
-    # 6. post text — best effort, the video is already done either way
+    # 6. cover image + post text — best effort, the video is already done either way
+    cover_path = None
+    if cfg.get("cover", {}).get("enabled", True):
+        try:
+            cover_path = video_assembler.make_cover(clips[0], topic, out_dir / "cover.png", cfg)
+        except Exception as e:
+            log.warning("cover image failed (%s) — continuing without it", e)
     if not description:
         description = script_generator.generate_description(topic, script, cfg)
 
@@ -216,6 +224,7 @@ def run_job(
 
     return JobResult(
         status="done", out_dir=out_dir, final_video=final_path, title=topic, description=description,
+        cover=cover_path,
     )
 
 

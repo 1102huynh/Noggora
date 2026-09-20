@@ -178,38 +178,101 @@ def _download(url: str, dest: Path) -> Path:
     return dest
 
 
+_QUERY_STOP = {"the", "and", "with", "for", "from", "person", "people", "man", "woman"}
+
+
+def _stem(word: str) -> str:
+    for suffix in ("ing", "ed", "es", "s"):  # crude: "meetings"/"meeting", "papers"/"paper"
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def _relevance(query: str, source: str, video: dict) -> float:
+    """0..1: how many of the query's words appear in what the source says about
+    the clip — Pixabay's `tags`, or the description slug in a Pexels clip's URL
+    ("/video/woman-typing-on-laptop-123/"). The APIs' own ranking is loose, so
+    this is what stops "coffee menu choosing" returning a random baby."""
+    if source == "pixabay":
+        text = str(video.get("tags", ""))
+    else:
+        match = re.search(r"/video/([^/]+?)-?\d*/?$", str(video.get("url", "")))
+        text = match.group(1) if match else ""
+    have = {_stem(w) for w in re.findall(r"[a-z]+", text.lower())}
+    # generic nouns ("person", "people") match far too much to count as evidence
+    want = {_stem(w) for w in re.findall(r"[a-z]+", query.lower()) if len(w) >= 3 and w not in _QUERY_STOP}
+    return len(want & have) / len(want) if want else 0.0
+
+
+# Take a clip as soon as enough of its query words are confirmed. Pixabay's
+# tags are long and reliable, so half the words is a fair bar. A Pexels URL slug
+# is only a few words, so the bar is lower — but Pexels ranks results by real
+# (semantic) relevance, which the slug can't show, so its top three results get
+# a bonus: rank alone isn't enough to pass, but rank + one confirmed word is.
+_GOOD_ENOUGH = {"pexels": 0.3, "pixabay": 0.5}
+_PEXELS_TOP_RANK_BONUS = 0.25
+
+
 def _fetch_scene_clip(
     sources: list[tuple], queries: list[str], needed_sec: float, clips_dir: Path, used_ids: set[str],
     max_queries: int = 6,
 ) -> Path | None:
     """Download one clip for a scene. `sources` is (name, search_fn, pick_fn,
-    api_key) in preference order for this scene. Walks the queries best-first;
-    for each, takes the first not-yet-used result from the preferred source
-    (portrait footage first, and footage at least as long as the scene when
-    possible so it doesn't have to loop), then falls back to the other source."""
+    api_key) in preference order for this scene.
+
+    Walks the queries best-first and scores every result for relevance to the
+    query (see _relevance). The first clip that clears _GOOD_ENOUGH (per
+    source) wins
+    (portrait, then long-enough-to-not-loop, break ties); if no query gets
+    there, the best-scoring clip seen overall is used, so a scene always gets
+    something."""
+    fallback: list[tuple] = []  # (name, pick_fn, video, query, relevance) — best first once sorted
+
+    def rank(name: str, video: dict, rel: float) -> tuple:
+        return (-rel, not _is_portrait(name, video), video.get("duration", 0) < needed_sec)
+
+    def download(name: str, pick_fn, video: dict, query: str, rel: float) -> Path | None:
+        link = pick_fn(video)
+        if not link:
+            return None
+        dest = clips_dir / f"{name}_{video['id']}.mp4"
+        try:
+            _download(link, dest)
+        except Exception as e:
+            log.warning("download failed for %s video %s: %s", name, video.get("id"), e)
+            return None
+        used_ids.add(f"{name}_{video['id']}")
+        log.info("scene clip <- %s %r (relevance %.0f%%, %s)", name, query, rel * 100, dest.name)
+        return dest
+
     for query in queries[:max_queries]:
-        for name, search_fn, pick_fn, api_key in sources:
+        good: list[tuple] = []
+        for src_idx, (name, search_fn, pick_fn, api_key) in enumerate(sources):
             try:
                 results = search_fn(query, api_key)
             except Exception as e:
                 log.warning("%s search for %r failed: %s", name, query, e)
                 continue
-            results = [v for v in results if f"{name}_{v['id']}" not in used_ids and v.get("duration", 0) >= 3]
-            # portrait first, then long-enough first, then the API's own relevance order
-            results.sort(key=lambda v: (not _is_portrait(name, v), v.get("duration", 0) < needed_sec))
-            for video in results[:3]:
-                link = pick_fn(video)
-                if not link:
+            for position, video in enumerate(results):
+                if f"{name}_{video['id']}" in used_ids or video.get("duration", 0) < 3:
                     continue
-                dest = clips_dir / f"{name}_{video['id']}.mp4"
-                try:
-                    _download(link, dest)
-                except Exception as e:
-                    log.warning("download failed for %s video %s: %s", name, video.get("id"), e)
-                    continue
-                used_ids.add(f"{name}_{video['id']}")
-                log.info("scene clip <- %s %r (%s)", name, query, dest.name)
-                return dest
+                rel = _relevance(query, name, video)
+                if name == "pexels" and position < 3:
+                    rel += _PEXELS_TOP_RANK_BONUS
+                entry = (src_idx, rank(name, video, rel), name, pick_fn, video, query, rel)
+                (good if rel >= _GOOD_ENOUGH[name] else fallback).append(entry)
+        # among clips that are good enough, this scene's preferred source goes first
+        # (sources alternate between scenes, so a video mixes Pexels and Pixabay)
+        for _, _, name, pick_fn, video, q, rel in sorted(good, key=lambda e: (e[0], e[1]))[:3]:
+            path = download(name, pick_fn, video, q, rel)
+            if path:
+                return path
+
+    # nothing cleared the bar for any query: the most relevant clip seen overall
+    for _, _, name, pick_fn, video, q, rel in sorted(fallback, key=lambda e: (e[1], e[0]))[:3]:
+        path = download(name, pick_fn, video, q, rel)
+        if path:
+            return path
     return None
 
 

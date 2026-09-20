@@ -38,6 +38,8 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
             print(f"\nDescription:\n{result.description}")
         else:
             print("\n(No description generated — Claude wasn't available. Title only.)")
+        if result.cover:
+            print(f"\nCover image: {result.cover}")
         print("---")
     elif result.status == "awaiting_manual_script":
         print(f'[{i}/{total}] "{short_topic}" -> awaiting manual script: {result.out_dir / "script.txt"} ✋')
@@ -81,6 +83,12 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     # Either way the script is already in hand, so run_job must not generate another.
     (out_dir / "script.txt").write_text(entry["script"], encoding="utf-8")
+    if entry.get("fact_check"):
+        notes = "\n".join(f"- {n}" for n in entry.get("fact_check_notes", [])) or "(nothing flagged)"
+        (out_dir / "factcheck.txt").write_text(f"verdict: {entry['fact_check']}\n{notes}\n", encoding="utf-8")
+    # Everything the generation produced, so `single --resume` re-renders the same video
+    # (same footage keywords and caption) instead of regenerating those parts.
+    (out_dir / "entry.json").write_text(json.dumps(entry, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if generated:
         # Archive right away, not after the render: if the video step fails, this
@@ -118,7 +126,16 @@ def cmd_single(args: argparse.Namespace, cfg: dict) -> int:
         log.error("--topic is required (or point --resume at a job dir with a job_log.json)")
         return 1
 
-    result = run_job(topic, language, cfg, out_dir=out_dir)
+    # A job made by `auto` left its generated extras beside the script — reuse them.
+    visual_keywords, description = None, None
+    entry_path = out_dir / "entry.json" if out_dir else None
+    if entry_path and entry_path.exists():
+        saved = json.loads(entry_path.read_text(encoding="utf-8"))
+        if saved.get("topic") == topic:
+            visual_keywords = [k.strip() for k in (saved.get("visual_keywords") or "").split(";") if k.strip()] or None
+            description = saved.get("description") or None
+
+    result = run_job(topic, language, cfg, out_dir=out_dir, visual_keywords=visual_keywords, description=description)
     _print_result(1, 1, topic, result)
     return 0 if result.status == "done" else 1
 

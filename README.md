@@ -58,7 +58,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Không — viết script mặc định qua lệnh `claude` (Claude Code CLI, tài khoản đã đăng nhập, mục 2). Chỉ cần key nếu đặt `script.provider: anthropic_api` (tính tiền riêng, **không** dùng chung với gói Claude Code) | [console.anthropic.com](https://console.anthropic.com/) |
 | `PEXELS_API_KEY` | Không — thiếu thì dùng riêng `PIXABAY_API_KEY` (nếu có), hoặc ảnh/video dự phòng trong `data/assets_local/` | Free tại [pexels.com/api](https://www.pexels.com/api/) (đăng ký tài khoản → tạo API key, có quyền thương mại) |
 | `PIXABAY_API_KEY` | Không — có cả 2 key thì mỗi video chia đều clip từ Pexels + Pixabay (đa dạng hơn), không bắt buộc phải có key này | Free tại [pixabay.com/api/docs](https://pixabay.com/api/docs/) (đăng ký tài khoản → lấy API key, license cho phép dùng thương mại, không cần credit) |
-| `ELEVENLABS_API_KEY` | Không — chỉ dùng khi đổi `voice.provider: elevenlabs` trong config | [elevenlabs.io](https://elevenlabs.io/) |
+| `ELEVENLABS_API_KEY` | Cần khi `voice.provider: elevenlabs` (đang bật); thiếu/lỗi thì đặt `edge_tts` để quay về giọng miễn phí | [elevenlabs.io](https://elevenlabs.io/) |
 
 **Vì sao không lấy ảnh từ Pinterest:** Pinterest không có API để tải ảnh/video của người khác về dùng lại (API của họ chỉ để *đăng* pin lên tài khoản, không phải để *tìm & tải*), và phần lớn nội dung trên đó là người dùng ghim lại từ nơi khác, không rõ bản quyền gốc — dùng để đăng lên kênh kiếm tiền có rủi ro copyright strike thật. Pexels/Pixabay được chọn vì cả hai đều cấp license miễn phí, rõ ràng, dùng thương mại không cần credit.
 
@@ -226,13 +226,17 @@ python main.py batch --file data/topics.csv --resume
 output/<slug-topic>-<timestamp>/
 ├── script.txt       # lời thoại (do Claude viết, lấy từ bank, hoặc bạn dán tay)
 ├── voice.mp3         # giọng đọc edge-tts
-├── voice.srt          # phụ đề gốc: mỗi cue là 1 cụm ≤ 6 từ (ngắt theo dấu phẩy), timing theo từng từ
+├── voice.srt          # phụ đề gốc: mỗi cue là 1 cụm ≤ 6 từ (ngắt theo dấu phẩy)
+├── voice.words.json     # timing từng từ của mỗi cụm (để tô từ đang đọc)
 ├── voice.ass           # phụ đề đã style + title card mở đầu + CTA cuối (theo config/settings.yaml)
 ├── clips/                # B-roll đã tải (Pexels/Pixabay) hoặc copy từ data/assets_local/
 ├── final.mp4              # ✅ video hoàn chỉnh, sẵn sàng đăng
 ├── post.txt                # tiêu đề + mô tả (caption + hashtag) để copy khi đăng
 ├── title.txt               # riêng tiêu đề
 ├── description.txt         # riêng mô tả
+├── cover.png               # ảnh bìa 1080x1920 (khung mở đầu + tên kênh + tiêu đề)
+├── factcheck.txt           # Claude đã sửa/ghi chú gì ở bước kiểm tra sự thật
+├── entry.json              # dữ liệu lần sinh (từ khoá hình, mô tả...) để `single --resume` render lại y hệt
 └── job_log.json            # log từng bước + danh sách cảnh (khoảng thời gian → clip nào)
 ```
 
@@ -245,13 +249,19 @@ output/<slug-topic>-<timestamp>/
   `topic_bank.csv` (cụm từ cách nhau bằng `;`, mỗi cảnh 1 cụm, theo thứ tự
   hook → cơ chế → ví dụ → hành động); (2) vật cụ thể được nhắc trong câu (movie,
   coffee, clock... — bảng `_CONCEPT_MAP` trong `visual_fetcher.py`); (3) từ khoá
-  chung về tâm lý. Cảnh lẻ lấy Pexels, cảnh chẵn lấy Pixabay (nguồn kia bù nếu thiếu).
+  chung về tâm lý. Cảnh lẻ ưu tiên Pexels, cảnh chẵn ưu tiên Pixabay (nguồn kia bù nếu thiếu).
+- **Chọn clip theo độ khớp:** mỗi kết quả được chấm theo số từ khoá trùng với
+  	ags của Pixabay / phần mô tả trong URL của Pexels; clip đủ khớp mới được lấy,
+  không thì thử từ khoá tiếp theo, cuối cùng mới lấy clip khớp nhất tìm được.
+  Số cảnh tự tăng với video dài (isuals.max_scene_sec).
 - **Nhìn thống nhất:** cùng 1 bộ chỉnh màu (hơi tối, ngả tím) + vignette cho mọi
   clip; clip dọc pan chậm; clip ngang hiện trong khung vuông trên nền mờ; các clip
   crossfade 0.25s.
 - **Hook:** chủ đề (câu hỏi) hiện to ở 2.8s đầu trên nền tối hơn; 2.5s cuối có dòng CTA.
-- **Caption:** cụm ≤ 6 từ, cỡ chữ 68, tên hiệu ứng ("sunk cost fallacy"...) tô vàng.
-- **Âm thanh:** nhạc nền tự hạ khi có giọng đọc (sidechain ducking).
+- **Caption:** cụm ≤ 6 từ, cỡ chữ 68; cả cụm luôn hiện và **từ đang được đọc đổi màu vàng** (karaoke, tắt bằng `subtitle.karaoke: false`); tên hiệu ứng ("sunk cost fallacy"...) luôn tô xanh nhạt.
+- **Âm thanh:** stereo; nhạc nền tự hạ khi có giọng đọc (sidechain ducking); có tiếng `hit` trầm khi title card hiện (`src/sfx.py`, tự tổng hợp; bỏ `hit.*` của bạn vào `data/assets_local/sfx/` để dùng thay). Tiếng `whoosh` ở chỗ chuyển clip đã **tắt** vì nghe chói tai — bật lại bằng `sfx.transitions: true`.
+- **Ảnh bìa:** `cover.png` để chọn làm cover trên TikTok/Shorts/Reels (mục `cover:` trong config).
+- **Kiểm tra sự thật:** sau khi viết, Claude rà soát script + caption thêm 1 lượt (`script.fact_check`): chỗ nào còn tranh cãi (ví dụ cơ chế của moon illusion) được viết lại dè dặt ("researchers still debate..."), số liệu/nghiên cứu không kiểm chứng được thì bỏ; ghi chú ở `factcheck.txt`. Thêm khoảng 20 giây mỗi lần chạy.
 
 Mỗi lần chạy tạo 1 thư mục riêng theo slug + timestamp — không bao giờ ghi đè
 job cũ, nên bạn luôn có thể debug/tái sử dụng asset của 1 job cụ thể.
@@ -338,10 +348,19 @@ nguồn viết script (`script.provider`, `cli_model`, `cli_timeout_sec`).
   Khi kênh Noggora bắt đầu kiếm tiền ổn định, khuyến nghị chuyển sang
   **Azure Cognitive Services Speech (TTS chính thức)** — cùng chất lượng
   giọng Neural, có hợp đồng dịch vụ và giới hạn sử dụng rõ ràng.
-- ElevenLabs **không** dùng làm mặc định (free tier ~10.000 ký tự/tháng,
-  không có quyền thương mại rõ ràng ở free tier) — chỉ nên dùng optional cho
-  video "hero" nếu đổi `voice.provider: elevenlabs` và có `ELEVENLABS_API_KEY`
-  trả phí.
+- **ElevenLabs (đang bật: `voice.provider: elevenlabs`, giọng George):** gói free
+  chỉ cho dùng các giọng **premade** qua API (giọng trong Voice Library báo
+  `402 paid_plan_required`) và có ~10.000 ký tự/tháng — khoảng 15 video, mỗi video
+  ~640 ký tự; xem đã dùng bao nhiêu: `GET /v1/user/subscription`. **Trước khi đăng
+  lên kênh kiếm tiền, tự kiểm tra điều khoản của ElevenLabs:** theo hiểu biết của
+  tôi gói free không có quyền thương mại (và yêu cầu ghi nguồn) — tôi chưa xác
+  minh lại điều khoản hiện hành. Nếu hết hạn mức, lỗi, hoặc không muốn dùng: đặt
+  `voice.provider: edge_tts` là quay về như cũ, không phải đổi gì khác.
+- Mỗi lần render lại (kể cả `single --resume`) là **gọi lại ElevenLabs và tốn thêm
+  ký tự**. Muốn chỉ ghép lại hình/âm mà không tốn ký tự thì dùng lại `voice.mp3` có sẵn.
+- Âm lượng cuối mỗi video được chuẩn hoá về `audio.target_lufs` (mặc định -14 LUFS)
+  vì các giọng đọc khác nhau ra mức to nhỏ rất khác nhau (ElevenLabs nhỏ hơn
+  edge-tts ~4 dB).
 - Nếu audio sinh ra dài hơn `video.max_duration_sec` (mặc định 45s), pipeline
   **không tự cắt** — chỉ log warning để bạn biết mà viết script ngắn hơn cho
   lần chạy tiếp theo (tránh mất mát nội dung do cắt tự động).

@@ -64,12 +64,19 @@ visuals:
   fallback_dir: data/assets_local
 
 music:
-  # Bỏ file nhạc royalty-free của bạn vào đây (hoặc vào <dir>/<mood>/ với mood:
-  # mysterious|tense|curious|warm|playful) — có file thì dùng file, không thì tự tổng hợp.
+  # Bỏ nhạc của bạn vào các thư mục con theo thể loại: <dir>/mysterious, tense, curious, warm,
+  # playful. Thể loại lấy theo chủ đề của video (Claude tự phân loại lúc viết bài). Trong mỗi
+  # thư mục, bài được dùng THEO THỨ TỰ TÊN FILE (đánh số 01 -, 02 - ... để điều khiển), video
+  # sau dùng bài kế tiếp, hết thì quay lại bài đầu. Thư mục trống thì dùng nhạc tự tổng hợp.
   dir: data/assets_local/music
-  # Chỉnh cho track tự tổng hợp (mean ~ -29 dB): ~ -31 dB lúc im lặng, tự hạ thêm ~10 dB
-  # khi có giọng đọc (sidechain ducking). Track nhạc thật thường to hơn nhiều -> đặt -15 đến -20.
-  volume_db: -2
+  state_file: data/music_state.json   # nhớ bài nào đã dùng lần cuối ở mỗi thư mục
+  # Nhạc luôn được cân để NHỎ HƠN giọng đọc đúng chừng này dB (đo độ to thật của cả hai, nên
+  # đúng với mọi giọng đọc và mọi bài nhạc). Nhạc còn tự hạ thêm khi có giọng nói (ducking).
+  # Đã đo trên video thật: số này = 16 -> nhạc (lúc nghỉ giữa các câu) nhỏ hơn giọng ~19.5 dB;
+  # số cũ (nhạc cố định) chỉ nhỏ hơn ~8 dB. Mặc định 12 -> ~15 dB. Muốn nhạc to hơn thì giảm
+  # số này (vd. 9), nhỏ hơn thì tăng (vd. 16).
+  below_voice_db: 12
+  fallback_volume_db: -18             # chỉ dùng nếu không đo được độ to
 
 cover:
   enabled: true                  # tạo cover.png (khung mở đầu + tên kênh + tiêu đề) để chọn làm ảnh bìa

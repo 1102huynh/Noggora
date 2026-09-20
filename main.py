@@ -101,6 +101,7 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
     result = run_job(
         entry["topic"], entry["language"], cfg, out_dir=out_dir,
         visual_keywords=visual_keywords or None, description=entry.get("description") or None,
+        mood=entry.get("mood") or None,
     )
     if result.status == "done" and not generated:
         topic_bank.mark_used(bank_path, entry["id"])
@@ -127,15 +128,18 @@ def cmd_single(args: argparse.Namespace, cfg: dict) -> int:
         return 1
 
     # A job made by `auto` left its generated extras beside the script — reuse them.
-    visual_keywords, description = None, None
+    visual_keywords, description, mood = None, None, None
     entry_path = out_dir / "entry.json" if out_dir else None
     if entry_path and entry_path.exists():
         saved = json.loads(entry_path.read_text(encoding="utf-8"))
         if saved.get("topic") == topic:
             visual_keywords = [k.strip() for k in (saved.get("visual_keywords") or "").split(";") if k.strip()] or None
             description = saved.get("description") or None
+            mood = saved.get("mood") or None
 
-    result = run_job(topic, language, cfg, out_dir=out_dir, visual_keywords=visual_keywords, description=description)
+    result = run_job(
+        topic, language, cfg, out_dir=out_dir, visual_keywords=visual_keywords, description=description, mood=mood,
+    )
     _print_result(1, 1, topic, result)
     return 0 if result.status == "done" else 1
 

@@ -72,20 +72,27 @@ def _voice_for_language(language: str, cfg: dict) -> str:
     return voice_cfg[f"{prefix}_en"]
 
 
-def _pick_music(topic: str, script: str, cfg: dict) -> Path | None:
-    """Mood-matched, fully-synthesized background music (see music_composer) —
-    picked per topic, zero copyright risk since nothing is sourced online."""
+def _music_state_path(cfg: dict) -> Path:
+    return Path(cfg.get("music", {}).get("state_file", "data/music_state.json"))
+
+
+def _pick_music(topic: str, script: str, cfg: dict, mood: str | None) -> music_composer.MusicChoice | None:
+    """Music for the topic's mood: your next track from data/assets_local/music/<mood>/
+    (in file-name order), else a synthesized pad (see music_composer)."""
     music_dir = Path(cfg.get("music", {}).get("dir", "data/assets_local/music"))
     try:
-        return music_composer.get_music_for_topic(topic, script, music_dir / "generated", library_dir=music_dir)
+        return music_composer.choose_music(
+            topic, script, music_dir / "generated", library_dir=music_dir,
+            state_path=_music_state_path(cfg), mood=mood,
+        )
     except Exception as e:
-        log.warning("music synthesis failed (%s) — continuing without background music", e)
+        log.warning("music selection failed (%s) — continuing without background music", e)
         return None
 
 
 def run_job(
     topic: str, language: str, cfg: dict, out_dir: Path | None = None,
-    visual_keywords: list[str] | None = None, description: str | None = None,
+    visual_keywords: list[str] | None = None, description: str | None = None, mood: str | None = None,
 ) -> JobResult:
     """Run the full pipeline for one topic.
 
@@ -96,6 +103,8 @@ def run_job(
     (from the topic bank); without them scenes are matched from their own text.
     `description` is the post caption if one was already written alongside the
     script; otherwise one is generated after the video is done.
+    `mood` (mysterious|tense|curious|warm|playful) picks the music folder; when
+    absent it is derived from the topic's keywords.
     """
     resuming = out_dir is not None
     if out_dir is None:
@@ -184,13 +193,17 @@ def run_job(
 
     # 5. assemble
     try:
-        music_path = _pick_music(topic, script, cfg)
+        music = _pick_music(topic, script, cfg, mood)
         final_path = video_assembler.assemble_video(
-            clips, voice_path, ass_path, music_path, out_dir / "final.mp4", cfg,
+            clips, voice_path, ass_path, music.path if music else None, out_dir / "final.mp4", cfg,
             durations=[s.duration for s in scenes],
         )
         log_data["steps"]["assemble"] = "ok"
-        log_data["music_used"] = str(music_path) if music_path else None
+        log_data["music_used"] = str(music.path) if music else None
+        log_data["music_mood"] = music.mood if music else None
+        log_data["music_source"] = music.source if music else None
+        if music:
+            music_composer.record_used(music, _music_state_path(cfg))  # only now: a failed render keeps its turn
     except Exception as e:
         return fail("assemble", e)
 

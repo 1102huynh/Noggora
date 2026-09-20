@@ -288,11 +288,35 @@ cảnh quay/người thật, đăng ký `PEXELS_API_KEY` và/hoặc `PIXABAY_API
 
 ### 5.1 Nhạc nền — tự chọn theo "tâm trạng" chủ đề, tự sinh 100% (không bản quyền)
 
-**Ưu tiên nhạc thật của bạn:** nếu có file `.mp3/.wav/.m4a/.ogg` trong
-`data/assets_local/music/` (hoặc `data/assets_local/music/<mood>/` cho mood cụ
-thể), pipeline dùng file đó (chọn ngẫu nhiên). Chỉ dùng nhạc bạn có giấy phép
-sử dụng thương mại. Track thật thường to hơn track tự tổng hợp — nhớ giảm
-`music.volume_db` (khoảng -15 đến -20).
+**Nhạc của bạn, theo thể loại và theo thứ tự.** Bỏ file (`.mp3/.wav/.m4a/.ogg/.flac`)
+vào thư mục con của `data/assets_local/music/`:
+
+| Thư mục | Chủ đề kiểu |
+|---|---|
+| `mysterious/` (mặc định khi không rõ) | thao túng, bí mật, ảo giác, điều ta không để ý |
+| `tense/` | sợ hãi, áp lực, mất mát, bị phán xét, stress |
+| `curious/` | "vì sao…", trí nhớ, nhận thức, những điều lạ trong đời thường |
+| `warm/` | tin tưởng, quan hệ, tử tế, kết nối, hy vọng |
+| `playful/` | nhẹ nhàng, vui, thói quen ít quan trọng |
+
+- **Thể loại theo chủ đề:** Claude tự chọn thể loại khi viết bài (trường `mood`, lưu
+  trong `entry.json`); chủ đề bạn tự đưa vào (`single`) hoặc lấy từ bank thì đoán theo
+  từ khoá trong câu chủ đề (`_MOOD_KEYWORDS`).
+- **Theo thứ tự tên file:** trong mỗi thư mục, video đầu dùng bài đầu, video sau dùng
+  bài kế tiếp, hết thì quay lại bài đầu. Đánh số ở đầu tên file để điều khiển thứ tự
+  (`01 - …`, `02 - …`; `2` đứng trước `10`). Bài đã dùng lần cuối được nhớ trong
+  `data/music_state.json` (xoá file để bắt đầu lại từ bài đầu); chỉ ghi nhớ khi video
+  làm xong, nên video lỗi không làm mất lượt.
+- **Thư mục trống** thì thể loại đó dùng nhạc tự tổng hợp (bên dưới). Còn file nhạc để
+  thẳng trong `music/` (không nằm thư mục nào) chỉ được dùng khi thư mục thể loại trống.
+- **Âm lượng tự cân:** nhạc luôn được đặt nhỏ hơn giọng đọc đúng `music.below_voice_db`
+  (mặc định 12 dB LUFS ≈ 15 dB khi nghe thực tế ở lúc nghỉ giữa các câu), theo độ to đo
+  được của cả giọng lẫn bài nhạc, nên bài nhạc to hay nhỏ, giọng edge hay ElevenLabs đều
+  đúng; nhạc còn tự hạ thêm khi có tiếng nói. Không cần chỉnh âm lượng file trước.
+- Tên bài đã dùng cho mỗi video ghi trong `job_log.json` (`music_used`, `music_mood`,
+  `music_source`). Trong `data/assets_local/music/` có file `_DOC_TOI_DAY.txt` và các file
+  `_GOI_Y_TEN_BAI.txt` (gợi ý bài trên Pixabay Music cho từng thể loại).
+- Chỉ dùng nhạc bạn có quyền dùng thương mại, và lưu lại link/giấy phép từng bài.
 
 Nếu không có file nào, `src/music_composer.py` **không tải nhạc từ đâu cả** —
 nó tự tổng hợp bằng ffmpeg 1 bản ambient pad (chuỗi 4 hợp âm, stereo, nhiều
@@ -302,8 +326,8 @@ bảo an toàn bản quyền 100% — kể cả nhạc gắn nhãn "free" vẫn 
 ID nhầm hoặc đổi điều khoản). Chất lượng của bản tự tổng hợp chỉ ở mức nền
 ambient — nhạc thật sẽ hay hơn.
 
-Mỗi chủ đề được phân loại vào 1 trong 5 "tâm trạng" dựa trên từ khóa trong
-topic/script (`_MOOD_KEYWORDS` trong `music_composer.py`):
+Nhạc tự tổng hợp cũng chia theo 5 thể loại trên; phân loại theo từ khoá trong
+câu chủ đề (`_MOOD_KEYWORDS` trong `music_composer.py`) khi chưa có `mood` từ Claude:
 
 | Mood | Khớp với chủ đề kiểu | Cảm giác nhạc |
 |---|---|---|

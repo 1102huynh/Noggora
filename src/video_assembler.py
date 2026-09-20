@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 from src import sfx, subtitle_burner
-from src.utils import ffprobe_audio_channels, ffprobe_dimensions, ffprobe_duration, get_logger
+from src.utils import ffprobe_audio_channels, ffprobe_dimensions, ffprobe_duration, get_logger, measure_lufs
 
 log = get_logger("video_assembler")
 
@@ -82,6 +82,28 @@ def _clip_filter(i: int, clip: Path, width: int, height: int, fps: int, seg_sec:
         f"{head}scale={big_w}:{big_h}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height}:x='{x}':y='(ih-oh)/2',{tail}"
     )
+
+
+def _music_gain_db(voice_path: Path, music_path: Path, seconds: float, music_cfg: dict) -> float:
+    """Gain to apply to the music so it sits `music.below_voice_db` under the
+    voice, whatever the source: measured loudness of the voice minus that gap,
+    minus the loudness of the part of the track that will play. (Synthesized
+    pads are ~-29 LUFS, real tracks are usually -10 to -16 — and different TTS
+    voices differ by ~4 dB — so any fixed dB setting was wrong for something.)
+    Ducking under speech comes on top of this. Falls back to a fixed gain if a
+    measurement fails."""
+    below = float(music_cfg.get("below_voice_db", 18))
+    voice_lufs = measure_lufs(voice_path)
+    music_lufs = measure_lufs(music_path, max_seconds=seconds)
+    if voice_lufs is None or music_lufs is None:
+        fallback = float(music_cfg.get("fallback_volume_db", -18))
+        log.warning("couldn't measure loudness (voice=%s, music=%s) — using fixed music gain %s dB",
+                    voice_lufs, music_lufs, fallback)
+        return fallback
+    gain = max(-45.0, min(20.0, voice_lufs - below - music_lufs))
+    log.info("music level: voice %.1f LUFS, music %.1f LUFS -> gain %+.1f dB (music sits %.0f dB under the voice)",
+             voice_lufs, music_lufs, gain, below)
+    return gain
 
 
 def make_cover(clip: Path, title: str, out_path: Path, cfg: dict) -> Path:
@@ -241,7 +263,7 @@ def assemble_video(
     mix_inputs: list[str] = []
     if music_idx is not None:
         music_cfg = cfg.get("music", {})
-        volume_db = music_cfg.get("volume_db", -2)
+        volume_db = _music_gain_db(audio_path, music_path, audio_duration, music_cfg)
         fade_out_start = max(audio_duration - 1.5, 0.0)
         filter_parts.append(f"[{voice_idx}:a]{voice_prep},asplit=2[voice_a][voice_sc]")
         filter_parts.append(
@@ -281,7 +303,10 @@ def assemble_video(
     # around -14 LUFS. loudnorm brings every video there with a true-peak
     # ceiling; it works at 192 kHz internally, hence the resample back.
     target = float(cfg.get("audio", {}).get("target_lufs", -14))
-    loudnorm = f"loudnorm=I={target}:TP=-1.5:LRA=9,aresample=44100"
+    # A single-pass loudnorm only aims at the true-peak ceiling and can overshoot
+    # (measured +0.1 dBFS with a dense, loud music track), so a hard limiter
+    # follows it. level=0: don't let the limiter re-normalise the gain itself.
+    loudnorm = f"loudnorm=I={target}:TP=-1.5:LRA=9,aresample=44100,alimiter=limit=0.84:level=0"
     if len(mix_inputs) > 1:
         # normalize=0: amix otherwise divides every input by the input count,
         # which silently halved (-6 dB) the voice.

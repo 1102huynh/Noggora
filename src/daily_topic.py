@@ -19,7 +19,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from src import llm, script_generator, topic_bank
+from src import llm, music_composer, script_generator, topic_bank
 from src.utils import get_logger
 
 log = get_logger("daily_topic")
@@ -41,11 +41,13 @@ _AREAS = [
 _SYSTEM_TEMPLATE = """You write scripts for "Noggora", a faceless psychology short-video channel (TikTok / YouTube Shorts / Reels). Videos are 30-40 seconds, read aloud by a text-to-speech voice, with burned-in captions.
 
 Produce ONE new video. Reply with a single JSON object and nothing else (no markdown fences, no commentary):
-{{"effect": "...", "topic": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}}
+{{"effect": "...", "topic": "...", "mood": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}}
 
 effect: the name of the psychological effect, bias or principle the video is about, as psychologists name it (for example "sunk cost fallacy").
 
 topic: the video's title, phrased as a curiosity question addressed to the viewer, under 75 characters (for example "Why do you keep watching a bad movie to the end?").
+
+mood: which background music suits the TOPIC. Exactly one of: "mysterious" (hidden influences, secrets, illusions, things you don't notice), "tense" (fear, pressure, loss, judgment, stress), "curious" (puzzling everyday quirks, memory, perception, "why does this happen"), "warm" (trust, relationships, kindness, connection, hope), "playful" (light, funny, low-stakes everyday habits). When unsure, "mysterious".
 
 script: English, {min_words}-{max_words} words, spoken and conversational, not academic. Structure:
   1. Sentence one is a hook: a curiosity gap or a paradox the viewer recognises from their own life.
@@ -153,6 +155,9 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
     topic = str(data.get("topic", "")).strip().strip('"')
     script = re.sub(r"[*_#`~]", "", str(data.get("script", ""))).strip().strip('"')
     description = str(data.get("description", "")).replace("\r", "").strip()
+    mood = str(data.get("mood", "")).strip().lower()
+    if mood not in music_composer.MOODS:
+        mood = ""  # unusable -> the music picker falls back to the topic's keywords
     keywords = [str(k).strip() for k in (data.get("visual_keywords") or []) if str(k).strip()]
 
     if not effect or not topic or not script:
@@ -165,7 +170,7 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
     if len(keywords) < 3:
         raise ValueError(f"only {len(keywords)} visual_keywords")
     return {
-        "effect": effect, "topic": topic, "language": "en", "script": script,
+        "effect": effect, "topic": topic, "language": "en", "script": script, "mood": mood,
         "description": description, "visual_keywords": ";".join(keywords[:5]),
     }
 

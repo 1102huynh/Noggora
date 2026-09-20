@@ -18,8 +18,10 @@ channel's audio muted/claimed.
 
 from __future__ import annotations
 
-import random
+import json
+import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.utils import get_logger
@@ -49,30 +51,40 @@ _MOODS: dict[str, dict] = {
                 "tremolo": 0.26, "lowpass": 3000},
 }
 
+# Fallback classifier, run on the TOPIC only (topics written by Claude carry
+# their own `mood`, see daily_topic.py). "why" is deliberately absent: nearly
+# every topic starts with it, so it used to drag everything into one mood.
 _MOOD_KEYWORDS: dict[str, list[str]] = {
-    "mysterious": ["secret", "hidden", "manipulat", "control", "deceiv", "trick", "unconscious", "subconscious"],
-    "tense": ["fear", "danger", "loss", "losing", "threat", "emergency", "crash", "risk", "scared",
-              "anxious", "afraid", "alarm", "judgment", "pressure", "confess"],
-    "curious": ["why", "notice", "wonder", "curious", "strange", "surprising", "paradox", "random"],
-    "warm": ["trust", "friend", "closer", "help", "hope", "kind", "connection", "reciproc", "gift"],
-    "playful": ["furniture", "coffee", "spill", "funny", "game", "lottery", "jam", "movie", "song", "mistake", "clumsy"],
+    "mysterious": ["secret", "hidden", "manipulat", "control", "deceiv", "trick", "unconscious", "subconscious",
+                   "illusion", "fooled", "hear", "notice", "see "],
+    "tense": ["fear", "danger", "loss", "losing", "threat", "emergency", "risk", "scared", "anxious", "afraid",
+              "judgment", "pressure", "confess", "stress", "nervous", "worse", "blame", "regret"],
+    "curious": ["wonder", "strange", "surprising", "paradox", "random", "suddenly", "everywhere", "remember",
+                "memory", "forget", "seem", "feel bigger", "feel better"],
+    "warm": ["trust", "friend", "closer", "help", "hope", "kind", "connection", "reciproc", "favor", "love",
+             "partner", "gift", "like someone", "happy"],
+    "playful": ["furniture", "coffee", "spill", "funny", "game", "lottery", "jam", "movie", "song", "mistake",
+                "clumsy", "shelf", "price"],
 }
 
 DEFAULT_MOOD = "mysterious"
+MOODS = tuple(_MOODS)  # the five names, also the names of the library sub-folders
 
 _TRACK_SEC = 62
 _CHORD_SEC = 17
 _CROSSFADE_SEC = 2
 
 
-def pick_mood(topic: str, script: str) -> str:
-    """Rule-based mood classifier: count keyword hits per mood, pick the top
-    scorer. Falls back to DEFAULT_MOOD (fits the channel's dark/moody brand)
-    when nothing matches — mirrors visual_fetcher's keyword approach."""
-    text = f"{topic} {script}".lower()
-    scores = {mood: sum(text.count(kw) for kw in kws) for mood, kws in _MOOD_KEYWORDS.items()}
-    best_mood, best_score = max(scores.items(), key=lambda kv: kv[1])
-    return best_mood if best_score > 0 else DEFAULT_MOOD
+def pick_mood(topic: str, script: str = "") -> str:
+    """Rule-based mood from the topic's keywords: count hits per mood, pick the
+    top scorer. Only if the topic says nothing is the script consulted, and
+    then DEFAULT_MOOD (fits the channel's dark/moody brand)."""
+    for text in (topic.lower(), script.lower()):
+        scores = {mood: sum(text.count(kw) for kw in kws) for mood, kws in _MOOD_KEYWORDS.items()}
+        best_mood, best_score = max(scores.items(), key=lambda kv: kv[1])
+        if best_score > 0:
+            return best_mood
+    return DEFAULT_MOOD
 
 
 def _midi_hz(note: int) -> float:
@@ -131,46 +143,112 @@ def _synthesize_mood_track(mood: str, out_path: Path) -> Path:
     return out_path
 
 
-def _find_library_track(library_dir: Path | None, mood: str) -> Path | None:
-    """A user-supplied track: prefer <library>/<mood>/, else any file directly
-    in <library>. Ignores the 'generated' cache folder."""
-    if library_dir is None or not library_dir.exists():
-        return None
-    for folder in (library_dir / mood, library_dir):
-        if not folder.is_dir():
-            continue
-        tracks = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _AUDIO_EXTS]
-        if tracks:
-            return random.choice(tracks)
-    return None
+def _natural_key(name: str) -> list:
+    """Sort key so "2 - a.mp3" comes before "10 - b.mp3" and case is ignored."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name.lower())]
 
 
-def get_music_for_topic(topic: str, script: str, cache_dir: Path, library_dir: Path | None = None) -> Path:
-    """Return a background-music file matched to the topic's mood: a
-    user-supplied track from library_dir if there is one, else a synthesized
-    pad. Each synthesized mood is rendered once and cached (same mood -> same
-    file across jobs) rather than re-synthesizing identical audio every run."""
-    mood = pick_mood(topic, script)
-    library_track = _find_library_track(library_dir, mood)
-    if library_track is not None:
-        log.info("using library track for mood %s: %s", mood, library_track)
-        return library_track
+def list_tracks(folder: Path) -> list[Path]:
+    """The audio files directly in `folder`, in the order they will be used:
+    by file name (natural order) — number them "01 - ...", "02 - ..." to control it."""
+    if not folder.is_dir():
+        return []
+    tracks = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _AUDIO_EXTS]
+    return sorted(tracks, key=lambda p: _natural_key(p.name))
+
+
+def _read_state(state_path: Path | None) -> dict:
+    if state_path is None or not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _next_in_order(tracks: list[Path], last_used: str | None) -> Path:
+    """The track after `last_used` in file-name order, wrapping around to the
+    first. Comparing names (not positions) keeps the order sensible when files
+    are added, renamed or removed between runs."""
+    if last_used:
+        last_key = _natural_key(last_used)
+        for track in tracks:
+            if _natural_key(track.name) > last_key:
+                return track
+    return tracks[0]
+
+
+@dataclass
+class MusicChoice:
+    path: Path
+    mood: str
+    source: str  # "library" (your track) or "synth"
+    state_key: str | None = None  # which folder's turn this was, for record_used()
+
+
+def choose_music(
+    topic: str, script: str, cache_dir: Path, library_dir: Path | None = None,
+    state_path: Path | None = None, mood: str | None = None,
+) -> MusicChoice:
+    """Pick the background music for a video.
+
+    The mood is `mood` if given (Claude classifies its own topics), else derived
+    from the topic's keywords. Then, in order:
+      1. <library_dir>/<mood>/ — the next track after the one used last time,
+         in file-name order, wrapping around;
+      2. audio files loose in <library_dir> — same rule;
+      3. a synthesized pad for the mood (cached per mood).
+    Nothing is recorded here: call record_used() once the video succeeded, so a
+    failed render doesn't skip a track.
+    """
+    mood = mood if mood in MOODS else pick_mood(topic, script)
+    state = _read_state(state_path)
+    if library_dir is not None and library_dir.exists():
+        for key, folder in ((mood, library_dir / mood), ("_any", library_dir)):
+            tracks = list_tracks(folder)
+            if tracks:
+                track = _next_in_order(tracks, state.get(key))
+                log.info("mood %s -> library track %d/%d in %s: %s",
+                         mood, tracks.index(track) + 1, len(tracks), folder.name, track.name)
+                return MusicChoice(track, mood, "library", key)
     cache_path = cache_dir / f"mood_{mood}_{_CACHE_VERSION}.mp3"
     if not cache_path.exists():
-        log.info("synthesizing new mood track: %s -> %s", mood, cache_path)
+        log.info("no tracks in %s — synthesizing a %s pad -> %s", (library_dir or Path('?')) / mood, mood, cache_path)
         _synthesize_mood_track(mood, cache_path)
     else:
-        log.info("using cached mood track: %s (%s)", mood, cache_path)
-    return cache_path
+        log.info("mood %s -> cached synthesized pad (%s)", mood, cache_path.name)
+    return MusicChoice(cache_path, mood, "synth")
+
+
+def record_used(choice: MusicChoice, state_path: Path | None) -> None:
+    """Remember that `choice` was used, so the next video with the same mood
+    takes the following track. No-op for synthesized music."""
+    if choice.source != "library" or choice.state_key is None or state_path is None:
+        return
+    state = _read_state(state_path)
+    state[choice.state_key] = choice.path.name
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def ensure_library_folders(library_dir: Path) -> list[Path]:
+    """Create <library_dir>/<mood>/ for each mood (where you put your tracks)."""
+    folders = []
+    for mood in MOODS:
+        folder = library_dir / mood
+        folder.mkdir(parents=True, exist_ok=True)
+        folders.append(folder)
+    return folders
 
 
 if __name__ == "__main__":
-    for topic, script in [
-        ("Why does silence after a question make people confess more?", "That gap is pressure, judgment, confess"),
-        ("Why do you love furniture you built yourself?", "a wobbly shelf, funny mistake"),
-        ("Why do you trust someone after they share a secret?", "hidden, trust, closer, connection"),
+    for topic in [
+        "Why does silence after a question make people confess more?",
+        "Why do you love furniture you built yourself?",
+        "Why do you trust someone after they share a secret?",
+        "Why do you keep watching a bad movie to the end?",
     ]:
-        mood = pick_mood(topic, script)
-        print(f"{mood:12s} <- {topic}")
-    out = get_music_for_topic("test danger emergency", "fear loss risk", Path("output/_selftest_music"))
-    print("generated:", out)
+        print(f"{pick_mood(topic):11s} <- {topic}")
+    lib = Path("data/assets_local/music")
+    for mood in MOODS:
+        print(f"{mood:11s}: {len(list_tracks(lib / mood))} track(s) in {lib / mood}")

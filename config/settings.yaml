@@ -87,30 +87,35 @@ content:
       brief: >-
         How the human mind works: cognitive biases, memory, perception, emotions, social behaviour.
         The answer names a real, well-established effect and explains it through an everyday moment.
+      tone: "personal and a little confessional — the viewer should feel caught red-handed, like the video is describing something they secretly do"
       hashtags: ["#psychology", "#psychologyfacts", "#mindset"]
     - id: science
       label: "SCIENCE"
       brief: >-
         An everyday phenomenon with a surprising, well-established scientific explanation: physics,
         chemistry, biology, the human body, materials, energy.
+      tone: "playful disbelief — the tone of telling a friend a fact so strange they'll say 'wait, really?'"
       hashtags: ["#science", "#sciencefacts", "#didyouknow"]
     - id: space
       label: "SPACE"
       brief: >-
         Astronomy and cosmology: planets, stars, black holes, light, time and the scale of the universe.
         The answer is a well-established, mind-stretching fact, not a theory still being argued.
+      tone: "quiet awe — make the viewer feel small in a good way, staring up at something vast"
       hashtags: ["#space", "#astronomy", "#universe"]
     - id: world
       label: "WORLD"
       brief: >-
         How the world works: geography, nature, animals, history, civilisations, cultures, the planet.
         A surprising TRUE fact that changes how you see something familiar.
+      tone: "wonder at how strange the ordinary world already is, without needing anything invented"
       hashtags: ["#worldfacts", "#geography", "#history"]
     - id: technology
       label: "TECHNOLOGY"
       brief: >-
         How technology actually works or came to be: the internet, GPS, batteries, chips, AI, everyday
         gadgets. One surprising mechanism or fact behind something people use daily without thinking.
+      tone: "the moment of realizing a thing you touch every day is quietly more clever than you assumed"
       hashtags: ["#technology", "#tech", "#howitworks"]
     - id: whatif
       label: "WHAT IF?"
@@ -118,6 +123,7 @@ content:
         A vivid hypothetical whose title starts with "What if". The answer is what physics, chemistry or
         biology says would REALLY happen (well-established or calculable), told as the single most
         surprising consequence. Never invented speculation.
+      tone: "adrenaline and stakes — narrate it like it's actually happening to the viewer right now"
       hashtags: ["#whatif", "#whatifscenarios", "#sciencefacts"]
 
 visuals:

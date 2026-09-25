@@ -309,6 +309,14 @@ def _is_blocked(source: str, video: dict) -> bool:
 
 _GOOD_ENOUGH = {"pexels": 0.3, "pixabay": 0.5}
 _PEXELS_TOP_RANK_BONUS = 0.25
+_RELEVANCE_TIER = 0.25  # width of a relevance "band" — see _fetch_scene_clip
+
+
+def _tier(rel: float) -> int:
+    """Coarse relevance band: content match is what a scene is picked for, so it must always beat
+    which source's "turn" it is. Alternating Pexels/Pixabay (for visual variety) only breaks ties
+    between matches that are roughly as good as each other, within the same band."""
+    return int(rel // _RELEVANCE_TIER)
 
 
 def _fetch_scene_clip(
@@ -318,12 +326,12 @@ def _fetch_scene_clip(
     """Download one clip for a scene. `sources` is (name, search_fn, pick_fn,
     api_key) in preference order for this scene.
 
-    Walks the queries best-first and scores every result for relevance to the
-    query (see _relevance). The first clip that clears _GOOD_ENOUGH (per
-    source) wins
-    (portrait, then long-enough-to-not-loop, break ties); if no query gets
-    there, the best-scoring clip seen overall is used, so a scene always gets
-    something."""
+    Walks the queries best-first and scores every result for relevance to the query (see
+    _relevance). Among clips that clear _GOOD_ENOUGH (per source), the highest relevance BAND wins
+    (see _tier) — a much better match from the "wrong" source is never passed over for a
+    barely-passing one from the scene's preferred source; only within the same band does source
+    preference, then portrait, then long-enough-to-not-loop break the tie. If no query gets there,
+    the best-scoring clip seen overall is used, so a scene always gets something."""
     fallback: list[tuple] = []  # (name, pick_fn, video, query, relevance) — best first once sorted
     lock = lock or threading.Lock()  # scenes are fetched in parallel; `used_ids` is shared between them
 
@@ -366,20 +374,24 @@ def _fetch_scene_clip(
                 if _is_blocked(name, video):
                     log.info("skipping %s clip %s: off-limits subject in its tags", name, video["id"])
                     continue
-                rel = _relevance(query, name, video)
-                if name == "pexels" and position < 3:
-                    rel += _PEXELS_TOP_RANK_BONUS
-                entry = (src_idx, rank(name, video, rel), name, pick_fn, video, query, rel)
+                base_rel = _relevance(query, name, video)
+                bonus = _PEXELS_TOP_RANK_BONUS if name == "pexels" and position < 3 else 0.0
+                rel = base_rel + bonus
+                # The rank bonus only helps a weak-evidence Pexels hit clear the pass/fail bar (see
+                # _PEXELS_TOP_RANK_BONUS's docstring); it must not also let a merely top-ranked
+                # result outrank a clip that is a genuinely better keyword match, so the tier
+                # (which source preference only breaks ties within) uses the un-boosted relevance.
+                entry = (src_idx, rank(name, video, rel), name, pick_fn, video, query, rel, base_rel)
                 (good if rel >= _GOOD_ENOUGH[name] else fallback).append(entry)
-        # among clips that are good enough, this scene's preferred source goes first
-        # (sources alternate between scenes, so a video mixes Pexels and Pixabay)
-        for _, _, name, pick_fn, video, q, rel in sorted(good, key=lambda e: (e[0], e[1]))[:3]:
+        # Best relevance band wins first; only within the same band does this scene's preferred
+        # source (sources alternate between scenes, for visual variety) break the tie.
+        for _, _, name, pick_fn, video, q, rel, _ in sorted(good, key=lambda e: (-_tier(e[7]), e[0], e[1]))[:3]:
             path = download(name, pick_fn, video, q, rel)
             if path:
                 return path
 
     # nothing cleared the bar for any query: the most relevant clip seen overall
-    for _, _, name, pick_fn, video, q, rel in sorted(fallback, key=lambda e: (e[1], e[0]))[:3]:
+    for _, _, name, pick_fn, video, q, rel, _ in sorted(fallback, key=lambda e: (e[1], e[0]))[:3]:
         path = download(name, pick_fn, video, q, rel)
         if path:
             return path

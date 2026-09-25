@@ -26,6 +26,7 @@ def test_the_channel_has_the_six_banner_categories_in_order(cfg):
 def test_every_category_is_fully_configured(cfg):
     for c in categories.get_categories(cfg):
         assert c["brief"].strip() and c["hashtags"] and all(h.startswith("#") for h in c["hashtags"])
+        assert c.get("tone", "").strip(), f"no emotional tone set for {c['id']}"
         assert c["id"] in categories.FOOTAGE_HINTS, f"no footage hint for {c['id']}"
         assert vf.NICHE_BY_CATEGORY[c["id"]], f"no fallback footage themes for {c['id']}"
 
@@ -155,6 +156,7 @@ def test_the_prompt_carries_the_category_the_tagline_and_the_length_rule(empty_f
     assert "ONE MINUTE" in system and f"{hi} words is a hard ceiling" in system
     assert "#whatif" in system                      # the category's broad hashtags go into the caption rules
     assert categories.FOOTAGE_HINTS["whatif"] in system
+    assert categories.by_id(cfg, "whatif")["tone"] in system   # emotional tone reaches the prompt
 
 
 def test_the_rotation_decides_the_category_when_none_is_forced(tmp_path, fake_llm):

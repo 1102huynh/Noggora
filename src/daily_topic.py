@@ -33,6 +33,7 @@ Each video is ONE question the viewer is dying to know the answer to, and ONE am
 
 TODAY'S CATEGORY: {label}
 {brief}
+Emotional tone for this category: {tone}.
 
 Produce ONE video in this category. Reply with a single JSON object and nothing else (no markdown fences, no commentary):
 {{"subject": "...", "topic": "...", "mood": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "..."]}}
@@ -231,7 +232,7 @@ def generate_daily_entry(
     system = _SYSTEM_TEMPLATE.format(
         channel=cfg.get("branding", {}).get("channel_name", "the channel"),
         tagline=content.get("tagline", "One question. One amazing answer."),
-        label=cat["label"], brief=cat.get("brief", ""),
+        label=cat["label"], brief=cat.get("brief", ""), tone=cat.get("tone", "curious and clear"),
         topic_rule='It MUST start with "What if".' if cat["id"] == "whatif" else "",
         min_words=min_words, max_words=max_words, typical=f"{min_words}-{min_words + 30} words",
         structure=script_generator.SCRIPT_STRUCTURE,

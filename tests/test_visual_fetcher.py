@@ -161,11 +161,28 @@ def sources(pexels_results=(), pixabay_results=(), order=("pexels", "pixabay")):
     return [table[name] for name in order]
 
 
-def test_the_scenes_preferred_source_wins_when_both_have_a_good_clip(tmp_path, fake_download):
-    src = sources([pexels_video(1, "coffee-menu-choosing")], [pixabay_video(2, "coffee, menu, choosing")])
+def test_the_scenes_preferred_source_wins_when_both_have_an_equally_good_clip(tmp_path, fake_download):
+    # the real match sits past position 3 in the Pexels results so it doesn't also pick up the
+    # top-3 rank bonus — both sides then score a plain, equal 1.0 and the tie goes to whichever
+    # source is this scene's turn, not to relevance (there's nothing to prefer between them).
+    filler = [pexels_video(90 + k, "totally-unrelated-filler") for k in range(3)]
+    pexels_hits = filler + [pexels_video(1, "coffee-menu-choosing")]
+    src = sources(pexels_hits, [pixabay_video(2, "coffee, menu, choosing")])
     got = vf._fetch_scene_clip(src, ["coffee menu choosing"], 6, tmp_path, set())
     assert got.name == "pexels_1.mp4"
     got = vf._fetch_scene_clip(list(reversed(src)), ["coffee menu choosing"], 6, tmp_path, set())
+    assert got.name == "pixabay_2.mp4"
+
+
+def test_a_much_better_match_from_the_non_preferred_source_wins_over_a_barely_passing_one(tmp_path, fake_download):
+    # pexels only matches "coffee" (1/3 words = 0.33, just clears its 0.3 bar) and sits past the
+    # top-3 rank-bonus window so nothing inflates it; pixabay matches all 3 words (1.0) — a full
+    # relevance band better. The preferred source (pexels goes first by default) must not win just
+    # because it's "its turn": content match comes before source rotation.
+    filler = [pexels_video(90 + k, "totally-unrelated-filler") for k in range(3)]
+    pexels_hits = filler + [pexels_video(1, "coffee-shop-morning")]  # position 3: no bonus, 1/3 words
+    src = sources(pexels_hits, [pixabay_video(2, "coffee, menu, choosing")])
+    got = vf._fetch_scene_clip(src, ["coffee menu choosing"], 6, tmp_path, set())
     assert got.name == "pixabay_2.mp4"
 
 

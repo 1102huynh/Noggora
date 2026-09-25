@@ -18,10 +18,16 @@ log = get_logger("script_generator")
 SCRIPT_STRUCTURE = (
     "The viewer HEARS the question first — the title is read aloud before your script — so NEVER restate or "
     "re-ask it. Structure: (1) a hook line that builds on the question they have just heard and makes them "
-    "need the answer; (2) THE ANSWER, "
-    "stated plainly and early — the one surprising thing that is true; (3) one vivid, concrete proof or "
-    "everyday example that makes it land; (4) one closing line that reframes what the viewer thought they "
-    "knew. One idea only: no side-tracks, no second explanation, no list of facts. LENGTH FOLLOWS THE "
+    "need the answer — a vivid image, a stake, or a claim that sounds almost unbelievable, NOT a rephrasing "
+    "of the question and NOT a generic opener (ban \"Ever wonder\", \"Have you ever\", \"Did you know\", "
+    "\"Turns out\" as openers — vary how every script starts); (2) THE ANSWER, stated plainly and early — "
+    "the one surprising thing that is true, and whenever the science genuinely supports it, framed as a "
+    "REVERSAL of what the viewer would assume (this channel's best-performing video: viewers expect doing "
+    "someone a favor makes THEM like you, but it's the reverse — asking someone for a small favor makes "
+    "THEM like YOU more; lead with that kind of twist when the real finding has one, never force a false one); "
+    "(3) one vivid, concrete proof or everyday example that makes it land; (4) one closing line that reframes "
+    "what the viewer thought they knew, landing on an image or feeling, not a restatement of the fact. One "
+    "idea only: no side-tracks, no second explanation, no list of facts. LENGTH FOLLOWS THE "
     "CONTENT within a hard limit: the whole video stays under one minute, so use only as many words as "
     "this particular answer needs to be complete and satisfying — a striking answer that lands fast can be "
     "short. Never pad, never rush, and cut anything that isn't earning its place; a longer script goes "
@@ -146,7 +152,7 @@ _FACTCHECK_SYSTEM = """You are the fact-checker and editor for a short-video cha
 - A study, number, date or name you cannot confirm: remove it or make it general or rounded. Never add new ones.
 - If the CORE answer itself (what the video presents as the answer to its question) is contested, still argued over by specialists, or not what the evidence shows: verdict "reject". Do not hide it behind hedging words; the channel needs a topic whose answer is settled. For a "What if" video the core answer must be what established physics, chemistry or biology actually predicts; speculation is a reject.
 
-2. WOW. Rate 1-5 how amazing the answer is to a curious non-expert: 5 = jaw-dropping, they will share it; 3 = interesting but familiar; 1 = obvious or dull. Be a tough judge.
+2. WOW. Rate 1-5 how amazing the answer is to a curious non-expert: 5 = jaw-dropping, they will share it; 3 = interesting but familiar; 1 = obvious or dull. Be a tough judge. This channel's real view data shows topics tied to something almost everyone has personally noticed (a face in a wall socket, the moon near the horizon) get far more views than facts that are merely interesting in the abstract (an effect few people consciously experience) — score an abstract, rarely-noticed topic no higher than 3 even if the fact itself is impressive.
 
 Any fixes keep the structure (hook, answer, proof, closing line), the conversational tone, plain sentences of 6-22 words ending in periods or question marks, numbers spelled out, and a length close to the original and NEVER above MAX_WORDS words. The title stays the same. If the caption repeats a wrong claim, fix it too, keeping its format (short lines, blank line, hashtags on one line).
 

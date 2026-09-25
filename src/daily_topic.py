@@ -39,17 +39,17 @@ Produce ONE video in this category. Reply with a single JSON object and nothing 
 
 subject: what the video is about, 2-5 words, as an encyclopaedia would title it (for example "sunk cost fallacy", "neutron stars", "GPS time dilation", "an Earth without the Moon").
 
-topic: THE QUESTION. Addressed to the viewer, under 75 characters, ending with a question mark, with a real curiosity gap that makes someone stop scrolling. {topic_rule}
+topic: THE QUESTION. Addressed to the viewer ("you"), under 75 characters, ending with a question mark, with a real curiosity gap that makes someone stop scrolling. Prefer something tied to a moment the viewer has personally lived or is living right now ("the light hitting your skin right now", "a socket that looks like it's staring at you") over a generic third-person phrasing of the same fact. Reach for a vivid or slightly strange image over a clinical "Why does X happen?" phrasing whenever one fits — picture the exact moment a viewer would be living when this crosses their mind, and ask about THAT. Vary the sentence shape from video to video (not always "Why do/does..."). {topic_rule}
 
 mood: which background music suits the topic. Exactly one of: "mysterious" (hidden forces, secrets, illusions, the unseen), "tense" (danger, pressure, loss, stakes), "curious" (puzzling everyday quirks, discovery, "how is that even possible"), "warm" (connection, kindness, hope, wonder at life), "playful" (light, funny, low-stakes). When unsure, "mysterious".
 
-script: English, between {min_words} and {max_words} words. The voice reads about 2.4 words per second and the whole video MUST stay under ONE MINUTE, so {max_words} words is a hard ceiling and most great answers fit in {typical}. {structure}
+script: English, between {min_words} and {max_words} words. The voice reads about 2.4 words per second and the whole video MUST stay under ONE MINUTE, so {max_words} words is a hard ceiling — but this channel's data shows 30-45 SECOND videos get far more views than anything near the one-minute ceiling, so treat {typical} as the real target and only go longer when the proof genuinely can't be told faster. {structure}
 
 description: the caption to paste under the post, in English. {description_rules}
 
 visual_keywords: short stock-footage search phrases (2-4 words each, plain English) for Pexels/Pixabay, in the order the footage should appear across the whole script: the opening hook, the answer, the proof or example, the closing line. Write roughly one per 15-20 words of your script (at least 6); the video changes shot about every 8 seconds, so every phrase must work on its own as a different shot. Suitable footage for this category: {footage}. Each phrase must describe something concrete a camera can film, never an abstract concept, and never a person's name or a brand.
 
-Choose an answer that is (a) true and settled among specialists and (b) genuinely surprising to a curious non-expert. If the best-known example of a topic is still argued over, choose another. Every video covers a DIFFERENT subject and angle from all earlier ones; never repeat, re-word, or write a second take on an earlier video. Earlier videos (question [subject, category]):
+Choose an answer that is (a) true and settled among specialists, (b) genuinely surprising to a curious non-expert, and (c) tied to something almost every viewer has personally noticed or experienced (a face in a wall socket, the moon near the horizon, missing something obvious, liking someone more after doing them a favor) rather than a fact that is merely interesting in the abstract (this channel's own data: relatable everyday-experience topics get roughly 10-30x the views of correct-but-abstract ones). If the best-known example of a topic is still argued over, choose another. Every video covers a DIFFERENT subject and angle from all earlier ones; never repeat, re-word, or write a second take on an earlier video. Earlier videos (question [subject, category]):
 {exclude}"""
 
 # --- duplicate detection -----------------------------------------------------
@@ -233,7 +233,7 @@ def generate_daily_entry(
         tagline=content.get("tagline", "One question. One amazing answer."),
         label=cat["label"], brief=cat.get("brief", ""),
         topic_rule='It MUST start with "What if".' if cat["id"] == "whatif" else "",
-        min_words=min_words, max_words=max_words, typical=f"{min_words + 25}-{max_words - 15} words",
+        min_words=min_words, max_words=max_words, typical=f"{min_words}-{min_words + 30} words",
         structure=script_generator.SCRIPT_STRUCTURE,
         description_rules=script_generator.description_rules(cat.get("hashtags")),
         footage=categories.FOOTAGE_HINTS.get(cat["id"], "concrete, filmable scenes"),

@@ -118,6 +118,9 @@ def build_youtube_post(
     out = [
         f"=== TIÊU ĐỀ — dán vào ô Tiêu đề ({title_note}) ===",
         title,
+        '^^^ CHỈ dán đúng dòng này vào ô Tiêu đề. TUYỆT ĐỐI không thêm hashtag hay dòng nào khác vào',
+        "    tiêu đề — hashtag dính vào tiêu đề từng làm 1 video chỉ còn 34 lượt xem so với 680+ của",
+        "    video có tiêu đề sạch cùng ngày. Hashtag để riêng ở khối MÔ TẢ bên dưới.",
         "",
         "=== MÔ TẢ — dán vào ô Mô tả ===",
         description,

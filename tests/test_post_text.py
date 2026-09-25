@@ -35,6 +35,12 @@ def section(text, header_start):
     return "\n".join(lines[start:end]).strip("\n")
 
 
+def title_line(text):
+    """The actual title text (first line of the TIÊU ĐỀ block) — that section also carries a
+    warning not to paste hashtags into the title field, so callers wanting just the title use this."""
+    return section(text, "TIÊU ĐỀ").split("\n", 1)[0]
+
+
 # --- splitting a caption -------------------------------------------------------------------------
 
 def test_hashtag_lines_are_pulled_out_and_text_lines_kept():
@@ -84,8 +90,15 @@ def test_shorts_is_added_when_the_model_forgot_it():
 
 def test_the_title_is_the_vietnamese_question_with_its_length_shown():
     text = build()
-    assert section(text, "TIÊU ĐỀ") == TITLE_VI
+    assert title_line(text) == TITLE_VI
     assert f"({len(TITLE_VI)}/100 ký tự)" in text
+
+
+def test_a_warning_against_pasting_hashtags_into_the_title_field_is_always_shown():
+    # a real video once had hashtags typed straight into the title field (YouTube truncated it to
+    # "...ologyfacts") and got 34 views the same day clean-titled videos got 680+ — this must never
+    # look like something safe to copy in whole.
+    assert "hashtag" in section(build(), "TIÊU ĐỀ").casefold()
 
 
 def test_the_description_leads_in_vietnamese_without_repeating_the_title():
@@ -126,13 +139,13 @@ def test_vietsub_in_the_description_by_default_and_as_a_tag():
 
 def test_vietsub_in_the_title_instead():
     text = build(settings={"vietsub": "title"})
-    assert section(text, "TIÊU ĐỀ") == TITLE_VI + " (Vietsub)"
+    assert title_line(text) == TITLE_VI + " (Vietsub)"
     assert "Vietsub —" not in section(text, "MÔ TẢ")
 
 
 def test_vietsub_in_both_places():
     text = build(settings={"vietsub": "both"})
-    assert section(text, "TIÊU ĐỀ").endswith("(Vietsub)") and "Vietsub —" in section(text, "MÔ TẢ")
+    assert title_line(text).endswith("(Vietsub)") and "Vietsub —" in section(text, "MÔ TẢ")
 
 
 def test_vietsub_off():
@@ -145,7 +158,7 @@ def test_the_title_suffix_is_skipped_when_it_would_break_the_100_character_limit
     long_title = ("Điều gì sẽ xảy ra nếu " + "Mặt Trăng biến mất đột ngột khỏi bầu trời đêm của chúng ta " * 2)[:95] + "?"
     assert 95 < len(long_title) <= 100 and len(long_title) + len(" (Vietsub)") > 100
     text = build(title_vi=long_title, settings={"vietsub": "title"})
-    assert section(text, "TIÊU ĐỀ") == long_title and 'Không thêm "(Vietsub)"' in text
+    assert title_line(text) == long_title and 'Không thêm "(Vietsub)"' in text
 
 
 def test_a_title_over_the_limit_is_flagged():
@@ -157,7 +170,7 @@ def test_a_title_over_the_limit_is_flagged():
 
 def test_without_a_translation_the_post_is_english_and_says_so():
     text = build(title_vi=None, description_vi=None)
-    assert section(text, "TIÊU ĐỀ") == TITLE_EN
+    assert title_line(text) == TITLE_EN
     assert "BẢN TIẾNG ANH" not in text and "Vietsub" not in section(text, "MÔ TẢ")
     assert "Chưa có bản dịch tiếng Việt" in text
     assert section(text, "MÔ TẢ").endswith("#shorts")
@@ -165,7 +178,7 @@ def test_without_a_translation_the_post_is_english_and_says_so():
 
 def test_a_missing_english_caption_does_not_crash():
     text = build(description_en=None)
-    assert section(text, "TIÊU ĐỀ") == TITLE_VI and "#shorts" in text
+    assert title_line(text) == TITLE_VI and "#shorts" in text
 
 
 def test_a_caption_that_is_only_the_title_line_still_produces_a_description():

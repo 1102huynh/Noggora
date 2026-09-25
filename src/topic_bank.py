@@ -38,8 +38,16 @@ def _days_in_month(dt: datetime) -> int:
     past when it should have refreshed."""
     return calendar.monthrange(dt.year, dt.month)[1]
 
-_BANK_FIELDNAMES = ["id", "topic", "language", "script", "used_at"]
-_EFFECTS_FIELDNAMES = ["id", "name", "mechanism", "example", "hook_subject", "topic", "used_batch"]
+# visual_keywords: ";"-separated B-roll search phrases, one per scene in
+# narrative order (hook, mechanism, example, ..., action) — see visual_fetcher.
+# effect: the specific subject the script is about — a psychological effect, a planet, a
+# technology, a scenario... (filled for AI-generated topics; used to refuse a later topic that
+# covers the same one). category: which channel category it belonged to (psychology, space, ...),
+# used to rotate evenly through the categories.
+_BANK_FIELDNAMES = [
+    "id", "topic", "language", "script", "used_at", "visual_keywords", "effect", "description", "category",
+]
+_EFFECTS_FIELDNAMES = ["id", "name", "mechanism", "example", "hook_subject", "topic", "used_batch", "visual_keywords"]
 
 # Do/does-free so they're grammatically safe regardless of whether an
 # effect's hook_subject clause has a singular or plural subject.
@@ -61,6 +69,20 @@ _MECHANISM_TEMPLATES_COMMA = [
 ]
 _MECHANISM_TEMPLATES_PERIOD = [
     "Psychologists call this the {name}. {mechanism_cap}.",
+]
+# Two extra beats between the example and the action, so template scripts
+# land near the ~85-word / 35s the hand-written ones do instead of ~22s.
+_CONTEXT_TEMPLATES = [
+    "Your brain does this automatically, long before you consciously decide anything.",
+    "It feels like your own judgment, but it's really a shortcut your mind takes to save energy.",
+    "Most people never notice it happening, which is exactly why it works so well.",
+    "It's not a flaw in you, it's how every human brain is wired to cope with too much information.",
+]
+_WHY_TEMPLATES = [
+    "That shortcut helped our ancestors decide fast, but it can quietly steer modern choices.",
+    "Once you know the pattern, you start spotting it in work, friendships, and even in your own thoughts.",
+    "It shapes small daily choices far more than most people would ever admit.",
+    "The strange part is that knowing about it doesn't make it disappear, it only makes it visible.",
 ]
 _ACTION_TEMPLATES = [
     "Next time you notice this, pause and ask if it's really true, or just the {name} talking.",
@@ -85,6 +107,27 @@ def _write_rows(bank_path: Path, rows: list[dict]) -> None:
             writer.writerow({k: row.get(k, "") for k in _BANK_FIELDNAMES})
 
 
+def _migrate_header(path: Path) -> None:
+    """Rewrite `path` with the current column set if it was created with an
+    older one (e.g. before the `effect` column existed). Appending rows with
+    new columns under an old header would silently drop those columns on the
+    next read. Rows already written with the new column count are kept as-is."""
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        raw = list(csv.reader(f))
+    if not raw or raw[0] == _BANK_FIELDNAMES:
+        return
+    old_header = raw[0]
+    records = []
+    for row in raw[1:]:
+        # Columns are only ever appended, so every older layout is a prefix of the current one:
+        # a row longer than the file's header was written with a newer layout than that header
+        # says, and follows the canonical order.
+        cols = _BANK_FIELDNAMES[: len(row)] if len(row) > len(old_header) else old_header
+        records.append(dict(zip(cols, row)))
+    _write_rows(path, records)
+    log.info("migrated %s to columns %s", path, _BANK_FIELDNAMES)
+
+
 def _append_used_rows(used_path: Path, rows: list[dict]) -> None:
     """Append already-used rows to the archive, creating it with a header
     if it doesn't exist yet. Kept separate from the active bank so
@@ -92,6 +135,8 @@ def _append_used_rows(used_path: Path, rows: list[dict]) -> None:
     so pick_next() has something to recycle from as a last resort."""
     file_exists = used_path.exists()
     used_path.parent.mkdir(parents=True, exist_ok=True)
+    if file_exists:
+        _migrate_header(used_path)
     with open(used_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_BANK_FIELDNAMES)
         if not file_exists:
@@ -179,6 +224,30 @@ def mark_used(bank_path: Path, entry_id: str, used_path: Path = DEFAULT_USED_PAT
     _append_used_rows(used_path, [used_row])
 
 
+def all_known_rows(bank_path: Path = DEFAULT_BANK_PATH, used_path: Path = DEFAULT_USED_PATH) -> list[dict]:
+    """Every row in the used archive then the active bank (oldest first) —
+    everything a freshly generated topic must not repeat or resemble."""
+    rows: list[dict] = []
+    for path in (used_path, bank_path):
+        if path.exists():
+            rows.extend(r for r in _read_rows(path) if r.get("topic"))
+    return rows
+
+
+def record_generated_used(
+    entry: dict, bank_path: Path = DEFAULT_BANK_PATH, used_path: Path = DEFAULT_USED_PATH,
+) -> None:
+    """Archive a topic that was generated on the fly (never sat in the bank)
+    straight into used_path, so future generations can compare against it."""
+    ids = [int(r["id"]) for p in (bank_path, used_path) if p.exists() for r in _read_rows(p) if r.get("id")]
+    _append_used_rows(used_path, [{
+        "id": str(max(ids, default=0) + 1), "topic": entry["topic"], "language": entry["language"],
+        "script": entry["script"], "used_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "visual_keywords": entry.get("visual_keywords", ""), "effect": entry.get("effect", ""),
+        "description": entry.get("description", ""), "category": entry.get("category", ""),
+    }])
+
+
 # --- monthly batch refresh --------------------------------------------------
 
 def _read_effects(path: Path) -> list[dict]:
@@ -202,9 +271,14 @@ def _render_from_effect(effect: dict, rng: random.Random) -> dict:
     mech = mech_template.format(name=effect["name"], mechanism=mechanism, mechanism_cap=mechanism_cap)
     example = effect["example"].strip().rstrip(".") + "."
     example = example[0].upper() + example[1:]
+    context = rng.choice(_CONTEXT_TEMPLATES)
+    why = rng.choice(_WHY_TEMPLATES)
     action = rng.choice(_ACTION_TEMPLATES).format(name=effect["name"])
-    script = " ".join([hook, mech, example, action])
-    return {"topic": effect["topic"], "language": "en", "script": script}
+    script = " ".join([hook, mech, example, context, why, action])
+    return {
+        "topic": effect["topic"], "language": "en", "script": script,
+        "visual_keywords": effect.get("visual_keywords") or "",
+    }
 
 
 def _generate_batch_template(n: int, effects_pool_path: Path, batch_id: int) -> list[dict]:
@@ -252,10 +326,12 @@ def _generate_batch_via_api(n: int, model: str, exclude_topics: set[str]) -> lis
             "giọng gần gũi không hàn lâm. Cấu trúc mỗi script bắt buộc: câu 1 hook gây tò mò "
             "hoặc nghịch lý; đoạn giữa 1 sự thật/insight tâm lý học có căn cứ, nêu tên hiệu ứng "
             "nếu có; câu cuối 1 hành động/góc nhìn người xem áp dụng được ngay. Không markdown, "
-            "không hashtag, không tiêu đề trong script.\n\n"
+            "không hashtag, không tiêu đề trong script. Mỗi chủ đề kèm thêm 5 cụm từ khoá tiếng Anh "
+            "ngắn (2-4 từ) để tìm video stock trên Pexels/Pixabay, mô tả cảnh cụ thể, quay được, "
+            "khớp lần lượt với 5 phần của script (không dùng khái niệm trừu tượng).\n\n"
             f"KHÔNG được trùng hoặc quá giống các chủ đề đã dùng sau:\n{exclude_list}\n\n"
             "Trả về DUY NHẤT 1 JSON array hợp lệ, không kèm chữ nào khác, dạng: "
-            '[{"topic": "...", "script": "..."}, ...]'
+            '[{"topic": "...", "script": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}, ...]'
         )
         response = client.messages.create(
             model=model, max_tokens=4000, system=system,
@@ -267,7 +343,10 @@ def _generate_batch_via_api(n: int, model: str, exclude_topics: set[str]) -> lis
             raise ValueError("no JSON array found in API response")
         items = json.loads(match.group(0))
         entries = [
-            {"topic": it["topic"].strip(), "language": "en", "script": it["script"].strip()}
+            {
+                "topic": it["topic"].strip(), "language": "en", "script": it["script"].strip(),
+                "visual_keywords": ";".join(str(k).strip() for k in (it.get("visual_keywords") or []) if str(k).strip()),
+            }
             for it in items if it.get("topic") and it.get("script")
         ]
         return entries or None
@@ -340,6 +419,7 @@ def ensure_fresh_batch(
         rows.append({
             "id": str(next_id), "topic": entry["topic"], "language": entry["language"],
             "script": entry["script"], "used_at": "",
+            "visual_keywords": entry.get("visual_keywords", ""),
         })
         next_id += 1
     _write_rows(bank_path, rows)

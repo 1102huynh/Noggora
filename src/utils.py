@@ -6,6 +6,7 @@ foundation every other module in `src/` imports.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -118,6 +119,48 @@ def ffprobe_duration(path: Path) -> float:
         capture_output=True, text=True, check=True,
     )
     return float(result.stdout.strip())
+
+
+def ffprobe_dimensions(path: Path) -> tuple[int, int]:
+    """Return (width, height) of the first video stream (or of an image)."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    stream = json.loads(result.stdout)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
+
+
+def measure_lufs(path: Path, max_seconds: float | None = None) -> float | None:
+    """Integrated loudness (LUFS, EBU R128, gated so pauses don't count) of an
+    audio file — of its first `max_seconds` if given — or None if it can't be
+    measured (unreadable, or effectively silent)."""
+    cmd = ["ffmpeg", "-hide_banner", "-nostats"]
+    if max_seconds:
+        cmd += ["-t", f"{max_seconds:.3f}"]
+    cmd += ["-i", str(path), "-vn", "-af", "ebur128", "-f", "null", "-"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    matches = re.findall(r"I:\s+(-?[\d.]+) LUFS", result.stderr)
+    if result.returncode != 0 or not matches:
+        return None
+    value = float(matches[-1])  # the last one is the end-of-file summary
+    return value if value > -69.0 else None  # -70 is ebur128's "nothing here"
+
+
+def ffprobe_audio_channels(path: Path) -> int:
+    """Channel count of the first audio stream."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=channels", "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return int(result.stdout.strip().splitlines()[0])
 
 
 def load_config(config_path: str | Path = "config/settings.yaml") -> dict[str, Any]:

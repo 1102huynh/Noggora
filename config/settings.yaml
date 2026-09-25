@@ -2,29 +2,62 @@ video:
   width: 1080
   height: 1920
   fps: 30
-  max_duration_sec: 45
+  # Độ dài do NỘI DUNG script quyết định nhưng KHÔNG BAO GIỜ quá max_duration_sec (1 phút). Ba lớp giữ
+  # trần này: (1) script.max_words giới hạn số từ Claude được viết, (2) nếu giọng đọc vẫn vượt trần thì
+  # tự tăng tốc nhẹ (giữ cao độ, tối đa +25%) cho vừa, không tốn thêm ký tự ElevenLabs, (3) vượt cả
+  # mức đó (script tự viết quá dài) thì chỉ cảnh báo trong log, không cắt nội dung.
+  max_duration_sec: 60
   min_duration_sec: 25
+  enforce_max_duration: true      # false = chỉ cảnh báo, không tự tăng tốc
 
 voice:
-  # ElevenLabs Free plan blocks TTS via API entirely (402 paid_plan_required,
-  # confirmed against this account even for a voice added to "My Voices") —
-  # back on edge_tts until the plan is upgraded. Flip to elevenlabs any time
-  # after upgrading; the elevenlabs_* keys below are already wired up.
-  provider: edge_tts            # edge_tts | elevenlabs
-  edge_voice_en: en-US-GuyNeural
+  # ElevenLabs Free plan: TTS via API works ONLY with the account's premade voices
+  # (George, Roger, Charlie, ...). Library voices (like the old cCYjmr... id) get
+  # 402 paid_plan_required. Free quota is 10,000 characters/month (~15 videos).
+  # If it fails or runs out, set provider back to edge_tts — nothing else to change.
+  provider: elevenlabs          # edge_tts | elevenlabs
+  # AndrewNeural: warmer / more conversational than GuyNeural. Other good
+  # en-US options: AvaNeural, BrianNeural, EmmaNeural, ChristopherNeural
+  # (all return word-level timing, which the captions depend on).
+  edge_voice_en: en-US-AndrewNeural
   edge_voice_vi: vi-VN-HoaiMyNeural
-  rate: "-15%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
-  # ElevenLabs (cần ELEVENLABS_API_KEY trong .env + gói trả phí). Đổi giọng:
-  # vào elevenlabs.io -> Voice Library -> chọn giọng -> copy Voice ID, dán vào đây.
-  elevenlabs_voice_en: "cCYjmrGZaI86GUJ7F2Nn"
-  elevenlabs_voice_vi: "cCYjmrGZaI86GUJ7F2Nn"   # model multilingual đọc được tiếng Việt qua cùng voice
+  rate: "-12%"                   # chỉ áp dụng cho edge_tts — "+0%" = tốc độ gốc, số âm = đọc chậm lại
+  # ElevenLabs (cần ELEVENLABS_API_KEY trong .env). Giọng premade dùng được ở gói free:
+  #   George JBFqnCBsd6RMkjVDRZzb (ấm, kể chuyện) | Roger CwhRBWXzGAHq8TQ4Fs17 (trầm, thoải mái)
+  #   Charlie IKne3meq5aSn9XLyUdCD (trầm, năng lượng) | Sarah EXAVITQu4vr4xnSDxMaL (nữ, chín chắn)
+  # Xem hết: GET https://api.elevenlabs.io/v1/voices. Voice trong Voice Library cần gói trả phí.
+  elevenlabs_voice_en: "JBFqnCBsd6RMkjVDRZzb"
+  elevenlabs_voice_vi: "JBFqnCBsd6RMkjVDRZzb"   # model multilingual đọc được tiếng Việt qua cùng voice
   elevenlabs_model: "eleven_multilingual_v2"
-  elevenlabs_speed: 0.85         # chỉ áp dụng cho elevenlabs — 1.0 = gốc, khoảng hợp lệ ~0.7-1.2
+  # 1.0 = tốc độ gốc, khoảng hợp lệ ~0.7-1.2. ĐÃ ĐO cả video với giọng George, script 105 từ:
+  #   1.0 -> 35.2s | 0.85 -> 44.1s (chậm hơn ~25%, vì cả quãng ngắt cũng dãn ra)
+  # Trần video là 60s (video.max_duration_sec) nên script.max_words = 130. Chậm hơn 0.85 thì hạ
+  # max_words; nhanh hơn (0.9) thì có thể nâng max_words lên một chút.
+  elevenlabs_speed: 0.85
+  # Giọng đọc CÂU HỎI (tiêu đề) trước rồi mới vào script, trong cùng một lần đọc. Title card hiện đúng
+  # suốt lúc câu hỏi được đọc; caption bắt đầu sau đó (không lặp lại câu hỏi). Script bắt đầu bằng đúng
+  # câu hỏi đó thì tự bỏ qua, không đọc hai lần. false = như cũ (title card 2.8s, không đọc tiêu đề).
+  read_title: true
 
 subtitle:
-  font: "Montserrat-Bold"
-  font_size: 52
+  # Family name, not "Montserrat-Bold": libass matches on the font's family
+  # ("Montserrat"), so the PostScript-style name silently fell back to Arial.
+  # style.bold=True in subtitle_burner.py selects the bold weight.
+  font: "Montserrat"
+  # Ngôn ngữ chữ ghi cứng trên video (giọng đọc luôn là tiếng Anh):
+  #   vi = phụ đề + title card TIẾNG VIỆT cho người Việt (người nước ngoài nghe tiếng Anh). Claude dịch theo
+  #        câu; dịch lỗi thì tự dùng phụ đề tiếng Anh. Có thêm voice.vi.srt (dùng làm phụ đề rời trên YouTube).
+  #   en = phụ đề tiếng Anh. Lưu ý: người xem TẮT TIẾNG (rất nhiều trên TikTok/Shorts) sẽ không đọc được
+  #        gì nếu chữ là tiếng Việt mà họ không biết tiếng Việt.
+  language: vi
+  max_words_per_caption_vi: 7   # tiếng Việt nhiều chữ ngắn hơn tiếng Anh nên mỗi caption cho phép dài hơn
+  font_size_vi: 62              # chữ có dấu cao hơn, cỡ nhỏ hơn chút để không bị 3 dòng
+  font_size: 68
   color: "&H00FFFFFF"           # trắng, định dạng ASS
+  karaoke: true                 # từ đang được đọc đổi màu (cả cụm luôn hiện, không hiện dần); false = caption tĩnh
+  active_word_color: "&H0032B0FA"   # vàng-cam thương hiệu (#FAB032) — từ đang đọc, nhãn chuyên mục, dòng CTA
+  highlight_color: "&H00FFFFFF" # tên hiệu ứng/chủ thể luôn được tô riêng; đặt trắng = tắt (đã có từ đang đọc)
+  max_words_per_caption: 6      # mỗi caption hiện tối đa từng này từ (ngắt theo dấu phẩy trước)
   outline_color: "&H00000000"
   position: "bottom_center"     # bottom_center | middle_center
   # % chiều cao video chừa trống phía dưới cho phụ đề (bottom_center) — phải
@@ -32,20 +65,139 @@ subtitle:
   # YouTube Shorts, TikTok, Reels đều tự vẽ đè lên khoảng dưới cùng video).
   safe_margin_percent: 28
 
+hook:
+  title_card: true               # hiện chủ đề (câu hỏi hook) thật to ở những giây đầu, kèm nhãn chuyên mục
+  title_sec: 2.8
+  title_font_size: 92
+  category_tag: true             # nhãn chuyên mục (PSYCHOLOGY, SPACE, ...) + gạch vàng phía trên câu hỏi
+  cta_text: "One question. One amazing answer."   # dòng cuối video; để trống "" để tắt
+  cta_sec: 2.5
+  cta_font_size: 56
+
+# Định hướng của kênh: "One question. One amazing answer." Mỗi video là MỘT câu hỏi và MỘT câu trả lời
+# gây bất ngờ. Chuyên mục được xoay vòng đều: mỗi lần `auto` chọn chuyên mục lâu chưa dùng nhất (theo
+# lịch sử data/topic_bank_used.csv), nên bỏ lỡ vài ngày cũng không bị lệch. Bỏ 1 chuyên mục khỏi danh
+# sách để không làm nữa; đổi thứ tự = đổi thứ tự khi chưa có lịch sử.
+content:
+  tagline: "One question. One amazing answer."
+  brand_color: "&H0032B0FA"      # vàng-cam của banner kênh (#FAB032), định dạng ASS (BGR)
+  categories:
+    - id: psychology
+      label: "PSYCHOLOGY"
+      brief: >-
+        How the human mind works: cognitive biases, memory, perception, emotions, social behaviour.
+        The answer names a real, well-established effect and explains it through an everyday moment.
+      tone: "personal and a little confessional — the viewer should feel caught red-handed, like the video is describing something they secretly do"
+      hashtags: ["#psychology", "#psychologyfacts", "#mindset"]
+    - id: science
+      label: "SCIENCE"
+      brief: >-
+        An everyday phenomenon with a surprising, well-established scientific explanation: physics,
+        chemistry, biology, the human body, materials, energy.
+      tone: "playful disbelief — the tone of telling a friend a fact so strange they'll say 'wait, really?'"
+      hashtags: ["#science", "#sciencefacts", "#didyouknow"]
+    - id: space
+      label: "SPACE"
+      brief: >-
+        Astronomy and cosmology: planets, stars, black holes, light, time and the scale of the universe.
+        The answer is a well-established, mind-stretching fact, not a theory still being argued.
+      tone: "quiet awe — make the viewer feel small in a good way, staring up at something vast"
+      hashtags: ["#space", "#astronomy", "#universe"]
+    - id: world
+      label: "WORLD"
+      brief: >-
+        How the world works: geography, nature, animals, history, civilisations, cultures, the planet.
+        A surprising TRUE fact that changes how you see something familiar.
+      tone: "wonder at how strange the ordinary world already is, without needing anything invented"
+      hashtags: ["#worldfacts", "#geography", "#history"]
+    - id: technology
+      label: "TECHNOLOGY"
+      brief: >-
+        How technology actually works or came to be: the internet, GPS, batteries, chips, AI, everyday
+        gadgets. One surprising mechanism or fact behind something people use daily without thinking.
+      tone: "the moment of realizing a thing you touch every day is quietly more clever than you assumed"
+      hashtags: ["#technology", "#tech", "#howitworks"]
+    - id: whatif
+      label: "WHAT IF?"
+      brief: >-
+        A vivid hypothetical whose title starts with "What if". The answer is what physics, chemistry or
+        biology says would REALLY happen (well-established or calculable), told as the single most
+        surprising consequence. Never invented speculation.
+      tone: "adrenaline and stakes — narrate it like it's actually happening to the viewer right now"
+      hashtags: ["#whatif", "#whatifscenarios", "#sciencefacts"]
+
 visuals:
-  clips_per_video: 5
-  min_clip_sec: 6
-  source: pexels                # pexels | local
+  clips_per_video: 5             # số cảnh tối thiểu
+  max_scene_sec: 8               # video dài thì tự tăng số cảnh để không cảnh nào lâu hơn ~8s (1 phút ≈ 7-8 cảnh)
+  max_clips: 40                  # trần số cảnh/clip mỗi video (giới hạn số lần gọi API + độ dài lệnh ffmpeg)
+  fetch_workers: 4               # số cảnh tải song song từ Pexels/Pixabay
+  plan_keywords: true            # sau khi có giọng đọc, hỏi Claude 1 cụm từ khoá hình cho MỖI cảnh theo đúng lời đang đọc
+  fade_sec: 0.25                 # thời gian crossfade giữa 2 clip
+  pan_zoom: 1.12                 # clip dọc được phóng 12% rồi pan chậm; 1.0 = tắt chuyển động
   fallback_dir: data/assets_local
 
 music:
+  # Bỏ nhạc của bạn vào các thư mục con theo thể loại: <dir>/mysterious, tense, curious, warm,
+  # playful. Thể loại lấy theo chủ đề của video (Claude tự phân loại lúc viết bài). Trong mỗi
+  # thư mục, bài được dùng THEO THỨ TỰ TÊN FILE (đánh số 01 -, 02 - ... để điều khiển), video
+  # sau dùng bài kế tiếp, hết thì quay lại bài đầu. Thư mục trống thì dùng nhạc tự tổng hợp.
   dir: data/assets_local/music
-  volume_db: -22
+  state_file: data/music_state.json   # nhớ bài nào đã dùng lần cuối ở mỗi thư mục
+  # Nhạc luôn được cân để NHỎ HƠN giọng đọc đúng chừng này dB (đo độ to thật của cả hai, nên
+  # đúng với mọi giọng đọc và mọi bài nhạc). Nhạc còn tự hạ thêm khi có giọng nói (ducking).
+  # Đã đo trên video thật: số này = 16 -> nhạc (lúc nghỉ giữa các câu) nhỏ hơn giọng ~19.5 dB;
+  # số cũ (nhạc cố định) chỉ nhỏ hơn ~8 dB. Mặc định 12 -> ~15 dB. Muốn nhạc to hơn thì giảm
+  # số này (vd. 9), nhỏ hơn thì tăng (vd. 16).
+  below_voice_db: 12
+  fallback_volume_db: -18             # chỉ dùng nếu không đo được độ to
+
+cover:
+  enabled: true                  # tạo cover.png (khung mở đầu + tên kênh + tiêu đề) để chọn làm ảnh bìa
+  frame_sec: 1.0                 # lấy khung hình ở giây thứ mấy của cảnh đầu
+  title_font_size: 104
+  brand_font_size: 54
+
+audio:
+  target_lufs: -14               # âm lượng tổng của video (chuẩn của TikTok/Shorts/Reels); mọi giọng đọc đều được đưa về mức này
+
+sfx:
+  enabled: true                  # bật/tắt toàn bộ hiệu ứng âm thanh
+  transitions: false             # tiếng whoosh ở mỗi chỗ chuyển clip — TẮT vì nghe chói tai; true để bật lại
+  # (tiếng "hit" trầm khi title card hiện vẫn bật; muốn bỏ nốt thì đặt enabled: false)
+  dir: data/assets_local/sfx     # bỏ whoosh.* / hit.* (wav/mp3/...) của bạn vào đây để dùng thay bản tự tổng hợp
+  volume_db: -14
+  hit_volume_db: -12
+
+# post.youtube.txt: tiêu đề + mô tả xếp sẵn để dán vào YouTube (tiếng Việt trước, tiếng Anh phía dưới).
+post:
+  youtube:
+    vietsub: description   # chữ "Vietsub" đặt ở: description | title (thêm "(Vietsub)") | both | none
+    max_hashtags: 12       # YouTube bỏ qua TẤT CẢ hashtag nếu quá 15
 
 branding:
   channel_name: "Noggora"
   watermark: false               # true nếu muốn overlay logo góc màn hình
 
 script:
-  anthropic_model: "claude-sonnet-5"   # override here if you want a cheaper/older model
-  max_words: 110
+  # Ai viết script: auto = dùng ANTHROPIC_API_KEY nếu có, không thì dùng lệnh `claude`
+  # (Claude Code CLI, chạy bằng tài khoản đang đăng nhập, không cần key), không có cả
+  # hai thì chế độ manual.  claude_cli | anthropic_api | manual để ép 1 cách.
+  provider: claude_cli
+  cli_model: "sonnet"                  # alias/model cho `claude --model`
+  cli_timeout_sec: 180
+  # false: `auto` mà Claude không viết được thì DỪNG và báo lỗi (không lặng lẽ lấy chủ đề từ file).
+  # true: tự dùng chủ đề viết sẵn trong data/topic_bank.csv. `auto --bank-only` luôn dùng file.
+  fallback_to_bank: false
+  # Sau khi viết, cho Claude rà soát độ chính xác 1 lượt nữa (thêm ~20s): câu nào còn tranh cãi thì viết
+  # lại dè dặt hơn, số liệu/nghiên cứu không kiểm chứng được thì bỏ. Ghi chú lưu ở output/<job>/factcheck.txt.
+  fact_check: true
+  # Lượt rà soát cũng chấm độ "wow" 1-5 (câu trả lời có thật sự bất ngờ không) và TỪ CHỐI (viết lại từ đầu
+  # với chủ đề khác) nếu câu trả lời cốt lõi còn tranh cãi hoặc điểm thấp hơn mức này.
+  min_wow: 3
+  anthropic_model: "claude-sonnet-5"   # chỉ dùng khi gọi API bằng key
+  # Độ dài script do nội dung quyết định: Claude viết đủ để câu trả lời trọn vẹn và hấp dẫn, không độn,
+  # không vội — nhưng video tối đa 1 phút. Đã đo với giọng ElevenLabs 0.85: 2.25-2.5 từ/giây (206 từ =
+  # 82s, 105 từ = 44s). Câu hỏi được đọc trước script (thêm ~10-12 từ), nên script tối đa 120 từ để cả
+  # video ≈ 52-58s. 60 từ ≈ 25s.
+  min_words: 60
+  max_words: 120

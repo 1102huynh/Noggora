@@ -1,4 +1,4 @@
-edge-tts>=6.1
+edge-tts>=7.0
 requests
 pyyaml
 pysubs2

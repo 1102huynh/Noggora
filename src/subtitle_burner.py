@@ -2,11 +2,15 @@
 
 ASS gives us control over font, size, color, outline and screen position that
 ffmpeg's plain srt subtitle filter does not — important because burned-in
-captions are the single biggest retention lever for this channel.
+captions are the single biggest retention lever for this channel. Besides the
+spoken-word captions this also adds the hook title card (the topic, shown big
+over the first seconds) and a closing call-to-action line.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import pysubs2
@@ -15,8 +19,31 @@ from src.utils import get_logger
 
 log = get_logger("subtitle_burner")
 
+def _align(position: int):
+    """Numpad-style ASS position as what the installed pysubs2 wants: recent
+    versions deprecate a plain int for SSAStyle.alignment in favour of an
+    Alignment enum (older ones only know ints)."""
+    enum = getattr(pysubs2, "Alignment", None)
+    return enum(position) if enum is not None else position
+
+
 # ASS alignment uses numpad-style positions: 2 = bottom-center, 5 = middle-center.
 _ALIGNMENT_MAP = {"bottom_center": 2, "middle_center": 5}
+
+# The named psychology effect ("sunk cost fallacy", "IKEA effect", ...) is the
+# one phrase per video worth making pop, so it is highlighted in the caption.
+_KEYWORD_RE = re.compile(
+    r"\b(effect|bias|fallacy|rule|illusion|phenomenon|technique|heuristic|hypothesis|"
+    r"aversion|gradient|blindness|adaptation|retrospection|error|paradox|"
+    r"contagion|loafing|licensing|reactance|prophecy)\b",
+    re.IGNORECASE,
+)
+# Words that can't be part of the effect's name when walking back from the
+# keyword ("That's the Zeigarnik effect" -> "Zeigarnik effect").
+_NAME_STOPWORDS = {
+    "the", "a", "an", "of", "this", "that", "that's", "it's", "is", "called", "as", "known",
+    "and", "or", "but", "so", "to", "call", "psychologists", "it", "its", "your", "our", "in",
+}
 
 
 def _parse_ass_color(hex_color: str) -> pysubs2.Color:
@@ -29,14 +56,161 @@ def _parse_ass_color(hex_color: str) -> pysubs2.Color:
     return pysubs2.Color(int(rr, 16), int(gg, 16), int(bb, 16), int(aa, 16))
 
 
+def _keyword_span(words: list[str]) -> tuple[int, int] | None:
+    """Indices (first, last) of the first "<name> effect"-style phrase in
+    `words`, or None. Walks back from the keyword over up to 2 name words."""
+    for idx, word in enumerate(words):
+        if not _KEYWORD_RE.fullmatch(word.strip(".,;:!?\"'").lower()):
+            continue
+        start = idx
+        while start > 0 and idx - start < 2:
+            prev = words[start - 1].strip(".,;:!?\"'").lower()
+            if prev in _NAME_STOPWORDS or words[start - 1].endswith((",", ";", ":", ".", "!", "?")):
+                break
+            start -= 1
+        if start == idx:  # bare "effect" with no name before it in this phrase
+            return None
+        return start, idx
+    return None
+
+
+def _color_tag(ass_color: str) -> str:
+    """"&HAABBGGRR" -> the "&HBBGGRR" form that a \\c override takes (no alpha byte)."""
+    return "&H" + ass_color.upper().replace("&H", "").rstrip("&").zfill(8)[2:]
+
+
+def _highlight_keyword(text: str, color_tag: str) -> str:
+    """Wrap the first "<name> effect"-style phrase in `text` in a colour override."""
+    words = text.split(" ")
+    span = _keyword_span(words)
+    if span is None:
+        return text
+    start, idx = span
+    trailing = ""
+    while words[idx] and words[idx][-1] in ".,;:!?":
+        trailing = words[idx][-1] + trailing
+        words[idx] = words[idx][:-1]
+    words[start] = "{\\c" + color_tag + "&}" + words[start]
+    words[idx] = words[idx] + "{\\r}" + trailing
+    return " ".join(words)
+
+
+def _karaoke_events(
+    line, phrase: dict, effect_tag: str | None, active_tag: str,
+) -> list[pysubs2.SSAEvent]:
+    """One event per spoken word: the whole phrase stays on screen and only the
+    word being said is coloured `active_tag` (so nothing builds up letter by
+    letter — the layout is identical in every event). The named effect, if
+    any, keeps `effect_tag` colour throughout."""
+    words = [w["t"] for w in phrase["words"]]
+    span = _keyword_span(words)
+    events = []
+    for k, w in enumerate(phrase["words"]):
+        parts = []
+        for j, word in enumerate(words):
+            if j == k:
+                parts.append("{\\c" + active_tag + "&}" + word + "{\\r}")
+            elif span and effect_tag and span[0] <= j <= span[1]:
+                parts.append("{\\c" + effect_tag + "&}" + word + "{\\r}")
+            else:
+                parts.append(word)
+        start_ms = int(w["s"] * 1000)
+        end_ms = line.end if k == len(words) - 1 else int(phrase["words"][k + 1]["s"] * 1000)
+        if k == 0:
+            start_ms = line.start
+        events.append(pysubs2.SSAEvent(
+            start=start_ms, end=max(end_ms, start_ms + 1), style="Default",
+            text=("{\\fad(70,0)}" if k == 0 else "") + " ".join(parts),
+        ))
+    return events
+
+
+def add_category_tag(
+    subs: pysubs2.SSAFile, label: str, width: int, height: int, font: str, color: str,
+    start_ms: int, end_ms: int, fade: bool = True,
+) -> None:
+    """The category label (PSYCHOLOGY, SPACE, WHAT IF?...) in the brand gold with a short gold bar under
+    it, centred just above the title — the look of the channel banner. Sits at fixed fractions of the
+    frame height so it clears the title block whatever the resolution."""
+    tag = pysubs2.SSAStyle()
+    tag.fontname = font
+    tag.fontsize = max(int(height * 0.024), 8)
+    tag.primarycolor = _parse_ass_color(color)
+    tag.outlinecolor = _parse_ass_color("&H00000000")
+    tag.borderstyle = 1
+    tag.outline = 3.0
+    tag.shadow = 1.0
+    tag.bold = True
+    tag.alignment = _align(5)
+    subs.styles["Tag"] = tag
+
+    cx = width // 2
+    label_y, bar_y = int(height * 0.385), int(height * 0.412)
+    bar_w, bar_h = int(width * 0.20), max(int(height * 0.0036), 2)
+    fx = "\\fad(350,350)" if fade else ""
+    gold = "&H" + color.upper().replace("&H", "").rstrip("&").zfill(8)[2:] + "&"
+    subs.append(pysubs2.SSAEvent(
+        start=start_ms, end=end_ms, style="Tag", text=f"{{\\pos({cx},{label_y}){fx}\\fsp8}}{label}",
+    ))
+    # vector drawing: a filled rectangle centred on \pos
+    subs.append(pysubs2.SSAEvent(
+        start=start_ms, end=end_ms, style="Tag",
+        text=(f"{{\\pos({cx},{bar_y}){fx}\\c{gold}\\bord0\\shad0\\p1}}"
+              f"m {-bar_w // 2} 0 l {bar_w // 2} 0 {bar_w // 2} {bar_h} {-bar_w // 2} {bar_h}{{\\p0}}"),
+    ))
+
+
+def write_cover_ass(
+    title: str, out_path: Path, style_cfg: dict, cover_cfg: dict, width: int, height: int, brand: str,
+    category_label: str = "",
+) -> Path:
+    """ASS for the cover image: brand name on top, the category tag, the title big in the middle."""
+    subs = pysubs2.SSAFile()
+    subs.info["PlayResX"] = str(width)
+    subs.info["PlayResY"] = str(height)
+
+    def make(size: int, align: int, marginv: int, color: str, outline: float) -> pysubs2.SSAStyle:
+        st = pysubs2.SSAStyle()
+        st.fontname = style_cfg.get("font", "Arial")
+        st.fontsize = size
+        st.primarycolor = _parse_ass_color(color)
+        st.outlinecolor = _parse_ass_color("&H00000000")
+        st.borderstyle = 1
+        st.outline = outline
+        st.shadow = 2.0
+        st.bold = True
+        st.alignment = _align(align)
+        st.marginl = st.marginr = 90
+        st.marginv = marginv
+        return st
+
+    subs.styles["Title"] = make(cover_cfg.get("title_font_size", 104), 5, 0, "&H00FFFFFF", 7.0)
+    subs.styles["Brand"] = make(cover_cfg.get("brand_font_size", 54), 8, 220, style_cfg.get("active_word_color", "&H0000D7FF"), 4.0)
+    subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Brand", text=brand.upper()))
+    subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Title", text=title.replace("\n", " ")))
+    if category_label:
+        add_category_tag(subs, category_label, width, height, style_cfg.get("font", "Arial"),
+                         style_cfg.get("active_word_color", "&H0032B0FA"), 0, 5000, fade=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    subs.save(str(out_path))
+    return out_path
+
+
 def srt_to_ass(
-    srt_path: Path, style_cfg: dict, out_path: Path, video_width: int = 1080, video_height: int = 1920
+    srt_path: Path, style_cfg: dict, out_path: Path, video_width: int = 1080, video_height: int = 1920,
+    title: str | None = None, hook_cfg: dict | None = None, duration: float | None = None,
+    words_path: Path | None = None, category_label: str = "",
 ) -> Path:
     """Convert srt_path -> out_path (.ass) styled per style_cfg (subtitle: block of settings.yaml).
 
     video_width/height set the ASS PlayRes — without it libass assumes a
     384x288 canvas and every coordinate (font size, margins) ends up scaled
     and positioned wrong once rendered onto a real 1080x1920 frame.
+
+    `title` + `hook_cfg` add the opening title card and closing CTA line
+    (`duration` = total video length, needed to place the CTA at the end).
+    `words_path` (voice.words.json) enables word-by-word highlighting when
+    subtitle.karaoke is on.
     """
     subs = pysubs2.load(str(srt_path), encoding="utf-8")
     subs.info["PlayResX"] = str(video_width)
@@ -48,12 +222,12 @@ def srt_to_ass(
     style.primarycolor = _parse_ass_color(style_cfg.get("color", "&H00FFFFFF"))
     style.outlinecolor = _parse_ass_color(style_cfg.get("outline_color", "&H00000000"))
     style.borderstyle = 1
-    style.outline = 3.0
-    style.shadow = 0.0
+    style.outline = 4.0
+    style.shadow = 1.0
     style.bold = True
 
     position = style_cfg.get("position", "bottom_center")
-    style.alignment = _ALIGNMENT_MAP.get(position, 2)
+    style.alignment = _align(_ALIGNMENT_MAP.get(position, 2))
     if position == "bottom_center":
         # Platform UI (channel name, title, description, like/comment/share
         # buttons) is drawn by YouTube/TikTok/Instagram *on top of* the video
@@ -64,17 +238,88 @@ def srt_to_ass(
         style.marginv = round(video_height * safe_margin_percent / 100)
     else:
         style.marginv = 0
-    style.marginl = 60
-    style.marginr = 60
+    style.marginl = 70
+    style.marginr = 70
 
     subs.styles.clear()
     subs.styles["Default"] = style
-    for line in subs:
-        line.style = "Default"
 
+    highlight = style_cfg.get("highlight_color")
+    color_tag = _color_tag(highlight) if highlight else None
+
+    phrases = None
+    if style_cfg.get("karaoke", False) and words_path is not None and Path(words_path).exists():
+        phrases = json.loads(Path(words_path).read_text(encoding="utf-8"))
+        if len(phrases) != len(subs):  # timing file from a different render — don't guess
+            log.warning("%s has %d captions but the srt has %d — skipping word highlighting",
+                        words_path, len(phrases), len(subs))
+            phrases = None
+    active_tag = _color_tag(style_cfg.get("active_word_color", "&H0000D7FF"))
+
+    karaoke_events: list[pysubs2.SSAEvent] = []
+    for i, line in enumerate(list(subs)):
+        line.style = "Default"
+        if phrases is not None:
+            karaoke_events.extend(_karaoke_events(line, phrases[i], color_tag, active_tag))
+            continue
+        text = _highlight_keyword(line.text, color_tag) if color_tag else line.text
+        line.text = "{\\fad(70,0)}" + text
+    if phrases is not None:
+        subs.events[:] = karaoke_events
+
+    hook_cfg = hook_cfg or {}
+    font = style.fontname
+    if title and hook_cfg.get("title_card", False):
+        title_style = pysubs2.SSAStyle()
+        title_style.fontname = font
+        title_style.fontsize = hook_cfg.get("title_font_size", 92)
+        title_style.primarycolor = _parse_ass_color("&H00FFFFFF")
+        title_style.outlinecolor = _parse_ass_color("&H00000000")
+        title_style.borderstyle = 1
+        title_style.outline = 6.0
+        title_style.shadow = 2.0
+        title_style.bold = True
+        title_style.alignment = _align(5)
+        title_style.marginl = 90
+        title_style.marginr = 90
+        subs.styles["Title"] = title_style
+        sec = float(hook_cfg.get("title_sec", 2.8))
+        subs.append(pysubs2.SSAEvent(
+            start=0, end=int(sec * 1000), style="Title",
+            text="{\\fad(350,350)}" + title.replace("\n", " "),
+        ))
+        if category_label and hook_cfg.get("category_tag", True):
+            add_category_tag(subs, category_label, video_width, video_height, font,
+                             style_cfg.get("active_word_color", "&H0032B0FA"), 0, int(sec * 1000))
+
+    cta = hook_cfg.get("cta_text")
+    if cta and duration:
+        cta_style = pysubs2.SSAStyle()
+        cta_style.fontname = font
+        cta_style.fontsize = hook_cfg.get("cta_font_size", 56)
+        cta_style.primarycolor = _parse_ass_color(
+            style_cfg.get("active_word_color", style_cfg.get("highlight_color", "&H00FFFFFF"))
+        )
+        cta_style.outlinecolor = _parse_ass_color("&H00000000")
+        cta_style.borderstyle = 1
+        cta_style.outline = 4.0
+        cta_style.shadow = 1.0
+        cta_style.bold = True
+        cta_style.alignment = _align(8)  # top-center: the bottom is taken by captions + platform UI
+        cta_style.marginv = 300
+        cta_style.marginl = 70
+        cta_style.marginr = 70
+        subs.styles["CTA"] = cta_style
+        cta_sec = float(hook_cfg.get("cta_sec", 2.5))
+        subs.append(pysubs2.SSAEvent(
+            start=int(max(duration - cta_sec, 0) * 1000), end=int(duration * 1000), style="CTA",
+            text="{\\fad(300,0)}" + cta,
+        ))
+
+    subs.sort()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     subs.save(str(out_path))
-    log.info("subtitle styled: %s -> %s (%d cues)", srt_path, out_path, len(subs))
+    log.info("subtitle styled: %s -> %s (%d events)", srt_path, out_path, len(subs))
     return out_path
 
 

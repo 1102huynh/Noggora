@@ -19,6 +19,14 @@ from src.utils import get_logger
 
 log = get_logger("subtitle_burner")
 
+def _align(position: int):
+    """Numpad-style ASS position as what the installed pysubs2 wants: recent
+    versions deprecate a plain int for SSAStyle.alignment in favour of an
+    Alignment enum (older ones only know ints)."""
+    enum = getattr(pysubs2, "Alignment", None)
+    return enum(position) if enum is not None else position
+
+
 # ASS alignment uses numpad-style positions: 2 = bottom-center, 5 = middle-center.
 _ALIGNMENT_MAP = {"bottom_center": 2, "middle_center": 5}
 
@@ -117,8 +125,46 @@ def _karaoke_events(
     return events
 
 
-def write_cover_ass(title: str, out_path: Path, style_cfg: dict, cover_cfg: dict, width: int, height: int, brand: str) -> Path:
-    """ASS for the cover image: brand name on top, the title big in the middle."""
+def add_category_tag(
+    subs: pysubs2.SSAFile, label: str, width: int, height: int, font: str, color: str,
+    start_ms: int, end_ms: int, fade: bool = True,
+) -> None:
+    """The category label (PSYCHOLOGY, SPACE, WHAT IF?...) in the brand gold with a short gold bar under
+    it, centred just above the title — the look of the channel banner. Sits at fixed fractions of the
+    frame height so it clears the title block whatever the resolution."""
+    tag = pysubs2.SSAStyle()
+    tag.fontname = font
+    tag.fontsize = max(int(height * 0.024), 8)
+    tag.primarycolor = _parse_ass_color(color)
+    tag.outlinecolor = _parse_ass_color("&H00000000")
+    tag.borderstyle = 1
+    tag.outline = 3.0
+    tag.shadow = 1.0
+    tag.bold = True
+    tag.alignment = _align(5)
+    subs.styles["Tag"] = tag
+
+    cx = width // 2
+    label_y, bar_y = int(height * 0.385), int(height * 0.412)
+    bar_w, bar_h = int(width * 0.20), max(int(height * 0.0036), 2)
+    fx = "\\fad(350,350)" if fade else ""
+    gold = "&H" + color.upper().replace("&H", "").rstrip("&").zfill(8)[2:] + "&"
+    subs.append(pysubs2.SSAEvent(
+        start=start_ms, end=end_ms, style="Tag", text=f"{{\\pos({cx},{label_y}){fx}\\fsp8}}{label}",
+    ))
+    # vector drawing: a filled rectangle centred on \pos
+    subs.append(pysubs2.SSAEvent(
+        start=start_ms, end=end_ms, style="Tag",
+        text=(f"{{\\pos({cx},{bar_y}){fx}\\c{gold}\\bord0\\shad0\\p1}}"
+              f"m {-bar_w // 2} 0 l {bar_w // 2} 0 {bar_w // 2} {bar_h} {-bar_w // 2} {bar_h}{{\\p0}}"),
+    ))
+
+
+def write_cover_ass(
+    title: str, out_path: Path, style_cfg: dict, cover_cfg: dict, width: int, height: int, brand: str,
+    category_label: str = "",
+) -> Path:
+    """ASS for the cover image: brand name on top, the category tag, the title big in the middle."""
     subs = pysubs2.SSAFile()
     subs.info["PlayResX"] = str(width)
     subs.info["PlayResY"] = str(height)
@@ -133,7 +179,7 @@ def write_cover_ass(title: str, out_path: Path, style_cfg: dict, cover_cfg: dict
         st.outline = outline
         st.shadow = 2.0
         st.bold = True
-        st.alignment = align
+        st.alignment = _align(align)
         st.marginl = st.marginr = 90
         st.marginv = marginv
         return st
@@ -142,6 +188,9 @@ def write_cover_ass(title: str, out_path: Path, style_cfg: dict, cover_cfg: dict
     subs.styles["Brand"] = make(cover_cfg.get("brand_font_size", 54), 8, 220, style_cfg.get("active_word_color", "&H0000D7FF"), 4.0)
     subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Brand", text=brand.upper()))
     subs.append(pysubs2.SSAEvent(start=0, end=5000, style="Title", text=title.replace("\n", " ")))
+    if category_label:
+        add_category_tag(subs, category_label, width, height, style_cfg.get("font", "Arial"),
+                         style_cfg.get("active_word_color", "&H0032B0FA"), 0, 5000, fade=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     subs.save(str(out_path))
     return out_path
@@ -150,7 +199,7 @@ def write_cover_ass(title: str, out_path: Path, style_cfg: dict, cover_cfg: dict
 def srt_to_ass(
     srt_path: Path, style_cfg: dict, out_path: Path, video_width: int = 1080, video_height: int = 1920,
     title: str | None = None, hook_cfg: dict | None = None, duration: float | None = None,
-    words_path: Path | None = None,
+    words_path: Path | None = None, category_label: str = "",
 ) -> Path:
     """Convert srt_path -> out_path (.ass) styled per style_cfg (subtitle: block of settings.yaml).
 
@@ -178,7 +227,7 @@ def srt_to_ass(
     style.bold = True
 
     position = style_cfg.get("position", "bottom_center")
-    style.alignment = _ALIGNMENT_MAP.get(position, 2)
+    style.alignment = _align(_ALIGNMENT_MAP.get(position, 2))
     if position == "bottom_center":
         # Platform UI (channel name, title, description, like/comment/share
         # buttons) is drawn by YouTube/TikTok/Instagram *on top of* the video
@@ -230,7 +279,7 @@ def srt_to_ass(
         title_style.outline = 6.0
         title_style.shadow = 2.0
         title_style.bold = True
-        title_style.alignment = 5
+        title_style.alignment = _align(5)
         title_style.marginl = 90
         title_style.marginr = 90
         subs.styles["Title"] = title_style
@@ -239,6 +288,9 @@ def srt_to_ass(
             start=0, end=int(sec * 1000), style="Title",
             text="{\\fad(350,350)}" + title.replace("\n", " "),
         ))
+        if category_label and hook_cfg.get("category_tag", True):
+            add_category_tag(subs, category_label, video_width, video_height, font,
+                             style_cfg.get("active_word_color", "&H0032B0FA"), 0, int(sec * 1000))
 
     cta = hook_cfg.get("cta_text")
     if cta and duration:
@@ -253,7 +305,7 @@ def srt_to_ass(
         cta_style.outline = 4.0
         cta_style.shadow = 1.0
         cta_style.bold = True
-        cta_style.alignment = 8  # top-center: the bottom is taken by captions + platform UI
+        cta_style.alignment = _align(8)  # top-center: the bottom is taken by captions + platform UI
         cta_style.marginv = 300
         cta_style.marginl = 70
         cta_style.marginr = 70

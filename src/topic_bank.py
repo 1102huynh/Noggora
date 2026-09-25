@@ -40,9 +40,13 @@ def _days_in_month(dt: datetime) -> int:
 
 # visual_keywords: ";"-separated B-roll search phrases, one per scene in
 # narrative order (hook, mechanism, example, ..., action) — see visual_fetcher.
-# effect: name of the psychological effect the script is about (filled for
-# AI-generated topics; used to refuse a later topic that covers the same one).
-_BANK_FIELDNAMES = ["id", "topic", "language", "script", "used_at", "visual_keywords", "effect", "description"]
+# effect: the specific subject the script is about — a psychological effect, a planet, a
+# technology, a scenario... (filled for AI-generated topics; used to refuse a later topic that
+# covers the same one). category: which channel category it belonged to (psychology, space, ...),
+# used to rotate evenly through the categories.
+_BANK_FIELDNAMES = [
+    "id", "topic", "language", "script", "used_at", "visual_keywords", "effect", "description", "category",
+]
 _EFFECTS_FIELDNAMES = ["id", "name", "mechanism", "example", "hook_subject", "topic", "used_batch", "visual_keywords"]
 
 # Do/does-free so they're grammatically safe regardless of whether an
@@ -115,7 +119,10 @@ def _migrate_header(path: Path) -> None:
     old_header = raw[0]
     records = []
     for row in raw[1:]:
-        cols = _BANK_FIELDNAMES if len(row) == len(_BANK_FIELDNAMES) else old_header
+        # Columns are only ever appended, so every older layout is a prefix of the current one:
+        # a row longer than the file's header was written with a newer layout than that header
+        # says, and follows the canonical order.
+        cols = _BANK_FIELDNAMES[: len(row)] if len(row) > len(old_header) else old_header
         records.append(dict(zip(cols, row)))
     _write_rows(path, records)
     log.info("migrated %s to columns %s", path, _BANK_FIELDNAMES)
@@ -237,7 +244,7 @@ def record_generated_used(
         "id": str(max(ids, default=0) + 1), "topic": entry["topic"], "language": entry["language"],
         "script": entry["script"], "used_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "visual_keywords": entry.get("visual_keywords", ""), "effect": entry.get("effect", ""),
-        "description": entry.get("description", ""),
+        "description": entry.get("description", ""), "category": entry.get("category", ""),
     }])
 
 

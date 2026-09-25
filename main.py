@@ -3,6 +3,7 @@
 
     python main.py auto                                            # zero-argument: Claude writes today's topic + script
     python main.py auto --bank-only                                # skip AI, use the pre-written data/topic_bank.csv
+    python main.py auto --category space                           # force a category instead of the even rotation
     python main.py single --topic "..." --lang vi
     python main.py single --resume "output/<job_slug>"          # after editing script.txt
     python main.py batch --file data/topics.csv --limit 10
@@ -38,6 +39,12 @@ def _print_result(i: int, total: int, topic: str, result: JobResult) -> None:
             print(f"\nDescription:\n{result.description}")
         else:
             print("\n(No description generated — Claude wasn't available. Title only.)")
+        if result.title_vi:
+            print(f"\nTiêu đề (tiếng Việt):\n{result.title_vi}")
+            if result.description_vi:
+                print(f"\nMô tả (tiếng Việt):\n{result.description_vi}")
+        if result.youtube_post:
+            print(f"\nReady to paste into YouTube: {result.youtube_post}")
         if result.cover:
             print(f"\nCover image: {result.cover}")
         print("---")
@@ -59,7 +66,11 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
     entry = None
     generated = False
     if not args.bank_only and args.lang in (None, "en"):
-        entry = daily_topic.generate_daily_entry(cfg, bank_path)
+        try:
+            entry = daily_topic.generate_daily_entry(cfg, bank_path, category=args.category)
+        except ValueError as e:  # unknown --category
+            log.error(str(e))
+            return 1
         generated = entry is not None
         if entry is None:
             if not cfg["script"].get("fallback_to_bank", False):
@@ -102,6 +113,7 @@ def cmd_auto(args: argparse.Namespace, cfg: dict) -> int:
         entry["topic"], entry["language"], cfg, out_dir=out_dir,
         visual_keywords=visual_keywords or None, description=entry.get("description") or None,
         mood=entry.get("mood") or None,
+        category=entry.get("category") or "psychology",  # the pre-written bank is all psychology
     )
     if result.status == "done" and not generated:
         topic_bank.mark_used(bank_path, entry["id"])
@@ -128,17 +140,19 @@ def cmd_single(args: argparse.Namespace, cfg: dict) -> int:
         return 1
 
     # A job made by `auto` left its generated extras beside the script — reuse them.
-    visual_keywords, description, mood = None, None, None
+    visual_keywords, description, mood, category = None, None, None, args.category
     entry_path = out_dir / "entry.json" if out_dir else None
     if entry_path and entry_path.exists():
         saved = json.loads(entry_path.read_text(encoding="utf-8"))
         if saved.get("topic") == topic:
+            category = saved.get("category") or category
             visual_keywords = [k.strip() for k in (saved.get("visual_keywords") or "").split(";") if k.strip()] or None
             description = saved.get("description") or None
             mood = saved.get("mood") or None
 
     result = run_job(
         topic, language, cfg, out_dir=out_dir, visual_keywords=visual_keywords, description=description, mood=mood,
+        category=category,
     )
     _print_result(1, 1, topic, result)
     return 0 if result.status == "done" else 1
@@ -207,11 +221,15 @@ def main() -> int:
     p_auto.add_argument("--bank", default="data/topic_bank.csv")
     p_auto.add_argument("--lang", choices=["en", "vi"], default=None, help="Restrict to one language (default: whichever comes up next in the bank)")
     p_auto.add_argument("--bank-only", action="store_true", help="Skip AI generation and use the pre-written topic bank")
+    p_auto.add_argument("--category", default=None,
+                        help="Force a category (psychology|science|space|world|technology|whatif) instead of the even rotation")
 
     p_single = sub.add_parser("single", help="Generate one video from one topic")
     p_single.add_argument("--topic", help="Topic string (required unless --resume points at a job with a job_log.json)")
     p_single.add_argument("--lang", default="en", choices=["en", "vi"])
     p_single.add_argument("--resume", metavar="OUT_DIR", help="Resume a job stuck at awaiting_manual_script")
+    p_single.add_argument("--category", default=None,
+                          help="Category tag + footage theme (psychology|science|space|world|technology|whatif)")
 
     p_batch = sub.add_parser("batch", help="Generate videos for pending topics in a CSV")
     p_batch.add_argument("--file", default="data/topics.csv")

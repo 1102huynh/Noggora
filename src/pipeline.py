@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src import music_composer, script_generator, subtitle_burner, video_assembler, visual_fetcher, voice_generator
+from src import categories, post_text, translate
 from src import scenes as scenes_mod
 from src.utils import ManualModeRequired, PipelineStepError, ffprobe_duration, get_logger, new_job_slug
 
@@ -34,6 +35,9 @@ class JobResult:
     title: str | None = None  # set when status == "done" — ready to paste as the YouTube title
     description: str | None = None  # post caption + hashtags, ready to paste (None if it couldn't be generated)
     cover: Path | None = None  # cover/thumbnail image (None if it couldn't be made)
+    title_vi: str | None = None  # Vietnamese title / caption, when the captions were translated
+    description_vi: str | None = None
+    youtube_post: Path | None = None  # post.youtube.txt: title + description laid out to paste into YouTube
 
 
 def _now_iso() -> str:
@@ -93,6 +97,7 @@ def _pick_music(topic: str, script: str, cfg: dict, mood: str | None) -> music_c
 def run_job(
     topic: str, language: str, cfg: dict, out_dir: Path | None = None,
     visual_keywords: list[str] | None = None, description: str | None = None, mood: str | None = None,
+    category: str | None = None,
 ) -> JobResult:
     """Run the full pipeline for one topic.
 
@@ -105,14 +110,18 @@ def run_job(
     script; otherwise one is generated after the video is done.
     `mood` (mysterious|tense|curious|warm|playful) picks the music folder; when
     absent it is derived from the topic's keywords.
+    `category` (an id from config content.categories: psychology, science, space,
+    world, technology, whatif) shows as the tag on the title card and cover, and
+    picks the fallback footage themes.
     """
     resuming = out_dir is not None
     if out_dir is None:
         out_dir = Path("output") / new_job_slug(topic)
     out_dir.mkdir(parents=True, exist_ok=True)
+    category_label = categories.label_for(cfg, category)
 
     log_data: dict = {
-        "topic": topic, "language": language, "resumed": resuming,
+        "topic": topic, "language": language, "category": category, "resumed": resuming,
         "started_at": _now_iso(), "steps": {},
     }
 
@@ -149,12 +158,21 @@ def run_job(
     except Exception as e:
         return fail("script", e)
 
-    # 2. voice
+    # 2. voice — the question (the title) is read aloud first, then the script
+    run_cfg = cfg  # cfg as used for the rest of this run (the title card follows the spoken question)
     try:
+        intro = voice_generator.intro_for(topic, script) if cfg.get("voice", {}).get("read_title", True) else None
         voice_path, srt_path = asyncio.run(
-            voice_generator.generate_voice(script, _voice_for_language(language, cfg), out_dir, cfg)
+            voice_generator.generate_voice(script, _voice_for_language(language, cfg), out_dir, cfg, intro=intro)
         )
         log_data["steps"]["voice"] = "ok"
+        intro_path = out_dir / "voice.intro.json"
+        if intro_path.exists():
+            intro_meta = json.loads(intro_path.read_text(encoding="utf-8"))
+            # the title card stays up exactly while the question is spoken (plus a beat), not a fixed 2.8 s
+            hook_cfg = {**cfg.get("hook", {}), "title_sec": round(max(intro_meta["end"] + 0.3, 1.5), 2)}
+            run_cfg = {**cfg, "hook": hook_cfg}
+            log_data["intro"] = {"text": intro_meta["text"], "end": round(intro_meta["end"], 2)}
     except Exception as e:
         return fail("voice", e)
 
@@ -162,32 +180,53 @@ def run_job(
     try:
         audio_duration = ffprobe_duration(voice_path)
         visuals_cfg = cfg["visuals"]
-        n_scenes = max(
-            visuals_cfg["clips_per_video"],
-            min(math.ceil(audio_duration / visuals_cfg.get("max_scene_sec", 8)), 8),
+        n_scenes = min(
+            max(visuals_cfg["clips_per_video"], math.ceil(audio_duration / visuals_cfg.get("max_scene_sec", 8))),
+            int(visuals_cfg.get("max_clips", 40)),
         )
         scenes = scenes_mod.plan_scenes(srt_path, audio_duration, n_scenes)
+        scene_keywords = None
+        if visuals_cfg.get("plan_keywords", True):
+            scene_keywords = visual_fetcher.plan_scene_keywords(scenes, topic, category_label, cfg)
         clips = visual_fetcher.fetch_visuals(
             topic, script, out_dir, len(scenes), cfg, language=language,
-            scenes=scenes, visual_keywords=visual_keywords,
+            scenes=scenes, visual_keywords=visual_keywords, category=category, scene_keywords=scene_keywords,
         )
         log_data["steps"]["visuals"] = "ok"
         log_data["clip_count"] = len(clips)
         log_data["scenes"] = [
-            {"start": round(s.start, 2), "end": round(s.end, 2), "clip": c.name} for s, c in zip(scenes, clips)
+            {"start": round(s.start, 2), "end": round(s.end, 2), "clip": c.name,
+             "phrase": scene_keywords[i] if scene_keywords else None}
+            for i, (s, c) in enumerate(zip(scenes, clips))
         ]
     except Exception as e:
         return fail("visuals", e)
 
-    # 4. subtitle (+ hook title card and closing CTA)
+    # 4. subtitle (+ hook title card and closing CTA). subtitle.language: vi burns Vietnamese
+    #    captions and a Vietnamese title card over the English narration; English is the fallback
+    #    whenever the translation isn't available, so the video always comes out.
+    vi = None
     try:
+        if cfg["subtitle"].get("language", "en") == "vi":
+            if not description:  # the translation covers the post caption too
+                description = script_generator.generate_description(topic, script, cfg)
+            try:
+                vi = translate.build_for_job(
+                    out_dir, topic, description, cfg, int(cfg["subtitle"].get("max_words_per_caption_vi", 7)),
+                )
+            except Exception as e:
+                log.warning("Vietnamese captions failed (%s) — using English captions", e)
+        sub_cfg = dict(cfg["subtitle"])
+        if vi and sub_cfg.get("font_size_vi"):
+            sub_cfg["font_size"] = sub_cfg["font_size_vi"]
         ass_path = subtitle_burner.srt_to_ass(
-            srt_path, cfg["subtitle"], out_dir / "voice.ass",
+            vi["srt"] if vi else srt_path, sub_cfg, out_dir / "voice.ass",
             video_width=cfg["video"]["width"], video_height=cfg["video"]["height"],
-            title=topic, hook_cfg=cfg.get("hook"), duration=audio_duration,
-            words_path=out_dir / "voice.words.json",
+            title=vi["title"] if vi else topic, hook_cfg=run_cfg.get("hook"), duration=audio_duration,
+            words_path=vi["words"] if vi else out_dir / "voice.words.json", category_label=category_label,
         )
         log_data["steps"]["subtitle"] = "ok"
+        log_data["caption_language"] = "vi" if vi else "en"
     except Exception as e:
         return fail("subtitle", e)
 
@@ -195,7 +234,7 @@ def run_job(
     try:
         music = _pick_music(topic, script, cfg, mood)
         final_path = video_assembler.assemble_video(
-            clips, voice_path, ass_path, music.path if music else None, out_dir / "final.mp4", cfg,
+            clips, voice_path, ass_path, music.path if music else None, out_dir / "final.mp4", run_cfg,
             durations=[s.duration for s in scenes],
         )
         log_data["steps"]["assemble"] = "ok"
@@ -211,7 +250,9 @@ def run_job(
     cover_path = None
     if cfg.get("cover", {}).get("enabled", True):
         try:
-            cover_path = video_assembler.make_cover(clips[0], topic, out_dir / "cover.png", cfg)
+            cover_path = video_assembler.make_cover(
+                clips[0], vi["title"] if vi else topic, out_dir / "cover.png", cfg, category_label=category_label,
+            )
         except Exception as e:
             log.warning("cover image failed (%s) — continuing without it", e)
     if not description:
@@ -233,11 +274,29 @@ def run_job(
     if description:
         (out_dir / "description.txt").write_text(description, encoding="utf-8")
         post += f"\nDESCRIPTION\n{description}\n"
+    title_vi = description_vi = None
+    if vi:
+        title_vi, description_vi = vi["title"], vi["description"] or None
+        (out_dir / "title.vi.txt").write_text(title_vi, encoding="utf-8")
+        post += f"\nTIÊU ĐỀ (tiếng Việt)\n{title_vi}\n"
+        if description_vi:
+            (out_dir / "description.vi.txt").write_text(description_vi, encoding="utf-8")
+            post += f"\nMÔ TẢ (tiếng Việt)\n{description_vi}\n"
     (out_dir / "post.txt").write_text(post, encoding="utf-8")
+    youtube_path = None
+    try:  # the paste-ready YouTube layout; decoration — never fail the job over it
+        youtube_path = out_dir / "post.youtube.txt"
+        youtube_path.write_text(
+            post_text.build_youtube_post(topic, description, title_vi, description_vi, cfg.get("post", {}).get("youtube")),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        log.warning("post.youtube.txt failed (%s) — post.txt still has the text", e)
+        youtube_path = None
 
     return JobResult(
         status="done", out_dir=out_dir, final_video=final_path, title=topic, description=description,
-        cover=cover_path,
+        cover=cover_path, title_vi=title_vi, description_vi=description_vi, youtube_post=youtube_path,
     )
 
 

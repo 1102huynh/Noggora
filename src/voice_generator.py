@@ -16,7 +16,9 @@ import base64
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from datetime import timedelta
 from pathlib import Path
 
@@ -226,13 +228,109 @@ def _synthesize_elevenlabs(script: str, voice_id: str, model_id: str, speed: flo
     return cues
 
 
+def _norm_words(text: str) -> list[str]:
+    return re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split()
+
+
+def intro_for(title: str, script: str) -> str | None:
+    """The line to read aloud before the script: the video's question. None when the script already
+    opens with (nearly) that same question, so it isn't said twice — older scripts, and ones you
+    write yourself, often restate it."""
+    title = title.strip()
+    if not title:
+        return None
+    sentences = _split_into_sentences(script)
+    if sentences:
+        a, b = _norm_words(title), _norm_words(sentences[0])
+        if a and b:
+            overlap = len(set(a) & set(b)) / min(len(set(a)), len(set(b)))
+            same_order = SequenceMatcher(None, a, b).ratio()
+            if same_order >= 0.72 or overlap >= 0.8:
+                return None
+    return title
+
+
+def _timings_to_srt(timings: list[dict]) -> str:
+    """SRT text for caption timings ([{"start", "end", "words": [{"t", ...}]}, ...])."""
+    blocks = []
+    for i, ph in enumerate(timings, 1):
+        text = " ".join(w["t"] for w in ph["words"])
+        blocks.append(
+            f"{i}\n{_format_srt_timestamp(timedelta(seconds=ph['start']))} --> "
+            f"{_format_srt_timestamp(timedelta(seconds=ph['end']))}\n{text}\n"
+        )
+    return "\n".join(blocks)
+
+
+def split_intro(timings: list[dict], intro_words: int) -> tuple[list[dict], dict | None]:
+    """Separate the captions of a spoken intro (the question, read aloud before the script) from
+    the rest. The intro is whole sentences, so it always ends on a caption boundary. Returns
+    (captions after the intro, {"start", "end"} of the intro or None). The intro is left out of the
+    captions on purpose: the title card shows that text on screen while it is being spoken."""
+    if intro_words <= 0:
+        return timings, None
+    seen, cut = 0, 0
+    for i, ph in enumerate(timings):
+        seen += len(ph["words"])
+        if seen >= intro_words:
+            cut = i + 1
+            break
+    else:
+        return timings, None  # fewer words than the intro claims: nothing sensible to split
+    intro = {"start": timings[0]["start"], "end": timings[cut - 1]["words"][-1]["e"]}
+    return timings[cut:], intro
+
+
+MAX_SPEEDUP = 1.25   # beyond this a voice sounds hurried, so a longer read is left alone (and warned about)
+_FIT_MARGIN_SEC = 0.5  # aim a little under the cap: the video is exactly as long as the voice track
+
+
+def _fit_to_max_duration(mp3_path: Path, cues: list, max_duration: float) -> list:
+    """If the voice track is longer than `max_duration`, speed it up just enough to fit (ffmpeg
+    atempo: tempo changes, pitch doesn't) and rescale every word timing to match.
+
+    This is the backstop for the hard length cap: the prompt and script.max_words should already keep
+    scripts short enough, but pacing varies (2.25-2.5 words/second measured) and a script at the word
+    limit can land a few seconds over. Re-synthesizing at a higher speed would cost ElevenLabs
+    characters again; stretching the file costs nothing. Speedups past MAX_SPEEDUP are refused.
+    Returns the (possibly rescaled) cues."""
+    duration = ffprobe_duration(mp3_path)
+    if duration <= max_duration:
+        return cues
+    factor = duration / (max_duration - _FIT_MARGIN_SEC)
+    if factor > MAX_SPEEDUP:
+        log.warning(
+            "voice is %.1fs, over the %ss cap, and fitting it would need a %.2fx speed-up (limit %.2fx) — "
+            "leaving it as is; shorten the script.", duration, max_duration, factor, MAX_SPEEDUP,
+        )
+        return cues
+    fitted = mp3_path.with_name(mp3_path.stem + "_fitted.mp3")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(mp3_path), "-filter:a", f"atempo={factor:.5f}",
+         "-q:a", "2", str(fitted)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.warning("could not speed the voice up to fit the cap (%s) — leaving it as is", result.stderr[-300:])
+        return cues
+    fitted.replace(mp3_path)
+    log.info("voice was %.1fs, sped up %.2fx to fit the %ss cap (now %.1fs)",
+             duration, factor, max_duration, ffprobe_duration(mp3_path))
+    return [WordCue(c.start / factor, c.end / factor, c.content) for c in cues]
+
+
 async def generate_voice(
-    script: str, voice: str, out_dir: Path, cfg: dict | None = None
+    script: str, voice: str, out_dir: Path, cfg: dict | None = None, intro: str | None = None,
 ) -> tuple[Path, Path]:
     """Synthesize `script` via the configured provider (voice.provider in
     settings.yaml: edge_tts or elevenlabs), writing out_dir/voice.mp3 and
     voice.srt. `voice` is an edge-tts voice name or an ElevenLabs voice ID,
     matching whichever provider is active.
+
+    `intro` (the video's question) is read aloud BEFORE the script, as part of the same take. Its
+    captions are left out of voice.srt / voice.words.json (the title card shows that text while it
+    is spoken) and its time span goes to voice.intro.json as {"text", "start", "end"}; without an
+    intro that file is removed so a stale one from an earlier run can't leak in.
 
     Returns (mp3_path, srt_path). Logs a warning (does not raise) if the
     resulting audio exceeds cfg['video']['max_duration_sec'] — the caller is
@@ -241,6 +339,8 @@ async def generate_voice(
     out_dir.mkdir(parents=True, exist_ok=True)
     mp3_path = out_dir / "voice.mp3"
     srt_path = out_dir / "voice.srt"
+    intro_path = out_dir / "voice.intro.json"
+    narration = f"{intro.strip()} {script}" if intro and intro.strip() else script
 
     voice_cfg = (cfg or {}).get("voice", {})
     provider = voice_cfg.get("provider", "edge_tts")
@@ -248,27 +348,38 @@ async def generate_voice(
     if provider == "elevenlabs":
         cues = await asyncio.to_thread(
             _synthesize_elevenlabs,
-            script, voice,
+            narration, voice,
             voice_cfg.get("elevenlabs_model", "eleven_multilingual_v2"),
             voice_cfg.get("elevenlabs_speed", 1.0),
             mp3_path,
         )
     else:
         rate = voice_cfg.get("rate", "+0%")
-        cues = await _synthesize_edge(script, voice, rate, mp3_path)
+        cues = await _synthesize_edge(narration, voice, rate, mp3_path)
+
+    video_cfg = (cfg or {}).get("video", {})
+    if video_cfg.get("max_duration_sec") and video_cfg.get("enforce_max_duration", True):
+        cues = _fit_to_max_duration(mp3_path, cues, float(video_cfg["max_duration_sec"]))
 
     max_caption_words = (cfg or {}).get("subtitle", {}).get("max_words_per_caption", 6)
-    srt_text, word_timings = _cues_to_srt(cues, script, max_caption_words)
+    srt_text, word_timings = _cues_to_srt(cues, narration, max_caption_words)
+    intro_info = None
+    if narration != script:
+        word_timings, intro_info = split_intro(word_timings, len(intro.split()))
+        srt_text = _timings_to_srt(word_timings)
     srt_path.write_text(srt_text, encoding="utf-8")
     (out_dir / "voice.words.json").write_text(json.dumps(word_timings, ensure_ascii=False), encoding="utf-8")
+    if intro_info:
+        intro_path.write_text(json.dumps({"text": intro.strip(), **intro_info}, ensure_ascii=False), encoding="utf-8")
+    else:
+        intro_path.unlink(missing_ok=True)
 
     duration = ffprobe_duration(mp3_path)
-    video_cfg = (cfg or {}).get("video", {})
     max_duration = video_cfg.get("max_duration_sec")
     if max_duration and duration > max_duration:
         log.warning(
-            "voice.mp3 is %.1fs, longer than max_duration_sec=%ss configured — "
-            "shorten the script for the next run.",
+            "voice.mp3 is %.1fs, longer than max_duration_sec=%ss configured and too long to fit by "
+            "speeding it up — shorten the script.",
             duration, max_duration,
         )
     min_duration = video_cfg.get("min_duration_sec")

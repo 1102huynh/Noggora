@@ -13,28 +13,57 @@ from src.utils import ManualModeRequired, get_logger, retry_network
 
 log = get_logger("script_generator")
 
+# The script rules live here so `single` (a topic you give) and `auto` (a topic Claude invents,
+# see daily_topic.py) hold every video to the same standard: ONE question, ONE amazing answer.
+SCRIPT_STRUCTURE = (
+    "The viewer HEARS the question first — the title is read aloud before your script — so NEVER restate or "
+    "re-ask it. Structure: (1) a hook line that builds on the question they have just heard and makes them "
+    "need the answer; (2) THE ANSWER, "
+    "stated plainly and early — the one surprising thing that is true; (3) one vivid, concrete proof or "
+    "everyday example that makes it land; (4) one closing line that reframes what the viewer thought they "
+    "knew. One idea only: no side-tracks, no second explanation, no list of facts. LENGTH FOLLOWS THE "
+    "CONTENT within a hard limit: the whole video stays under one minute, so use only as many words as "
+    "this particular answer needs to be complete and satisfying — a striking answer that lands fast can be "
+    "short. Never pad, never rush, and cut anything that isn't earning its place; a longer script goes "
+    "deeper into the SAME answer, it never adds a second topic. Plain, spoken, "
+    "conversational sentences of 6-22 words, ending in periods or question marks, with commas where a "
+    "speaker would pause. Spell numbers out as words. No emojis, hashtags, markdown, stage directions or "
+    "headings. Only well-established findings — never invent a study, statistic, date or name; if you are "
+    "unsure of an exact figure use a safe rounded or comparative one. No hedging like \"researchers still "
+    "debate\": the core answer must be something specialists agree on."
+)
+
 SYSTEM_PROMPT_TEMPLATE = (
-    "Bạn là copywriter cho kênh short-video tâm lý học tên Noggora. Viết script "
-    "{max_words} từ, ngôn ngữ {language}, giọng gần gũi không hàn lâm. Cấu trúc "
-    "bắt buộc: câu 1 là hook gây tò mò hoặc nghịch lý; đoạn giữa là 1 sự thật/insight "
-    "tâm lý học có căn cứ; câu cuối là 1 hành động/góc nhìn người xem áp dụng được ngay. "
-    "Không thêm tiêu đề, không thêm hashtag, không markdown, chỉ trả về đúng phần lời "
-    "thoại sẽ được đọc."
+    "You write scripts for {channel}, a faceless short-video channel (TikTok / YouTube Shorts / Reels) "
+    "whose promise is: \"{tagline}\" Categories: Psychology, Science, Space, World, Technology, What if? "
+    "The viewer sees the question as the title; you write what a voice reads aloud in {language}, "
+    "{min_words}-{max_words} words. " + SCRIPT_STRUCTURE + " Return only the words to be read."
 )
 
-# Shared with daily_topic (which asks for the description in the same call as the script).
-DESCRIPTION_RULES = (
-    "Format: 2-3 short lines: (1) a line that restates the hook so it stops the scroll, (2) one line with the "
-    "takeaway from the video, (3) a short question that invites comments. Then a blank line, then 6-8 "
-    "hashtags on ONE line: broad ones (#psychology #psychologyfacts #mindset) plus 2-3 specific to this video's "
-    "effect and situation, and #shorts. Under 350 characters in total. Plain text, no markdown, no emojis, no "
-    "claims of curing or diagnosing anything."
-)
 
-_DESCRIPTION_SYSTEM = (
-    "You write the caption for a short psychology video posted on TikTok, YouTube Shorts and Instagram Reels "
-    "by the channel Noggora. " + DESCRIPTION_RULES + " Reply with the caption only."
-)
+def description_rules(hashtags: list[str] | None = None) -> str:
+    """How the post caption should look. `hashtags` are the channel's broad tags for the video's
+    category (from config content.categories); the model adds 2-3 specific ones and #shorts."""
+    broad = " ".join(hashtags) if hashtags else "2-3 broad tags for the video's subject"
+    return (
+        "Format: 2-3 short lines: (1) the question, phrased to stop the scroll, (2) one line that teases or "
+        "states the amazing answer, (3) a short question that invites comments. Then a blank line, then 6-8 "
+        f"hashtags on ONE line: the broad ones ({broad}), 2-3 specific to this video's subject, and #shorts. "
+        "Under 350 characters in total. Plain text, no markdown, no emojis, no claims of curing or "
+        "diagnosing anything."
+    )
+
+
+def _description_system(cfg: dict) -> str:
+    content = cfg.get("content", {})
+    cats = "; ".join(f"{c['label']}: {' '.join(c.get('hashtags', []))}" for c in content.get("categories", []))
+    return (
+        f"You write the caption for a short video by the channel {cfg.get('branding', {}).get('channel_name', '')} "
+        "posted on TikTok, YouTube Shorts and Instagram Reels. "
+        + description_rules(None)
+        + (f" Broad tags by category (use the one that fits the video): {cats}." if cats else "")
+        + " Reply with the caption only."
+    )
 
 _MARKDOWN_CHARS = re.compile(r"[*_#`~]")
 
@@ -75,7 +104,11 @@ def generate_script(topic: str, cfg: dict, language: str = "en") -> str:
             "write your script by hand into output/<job_slug>/script.txt and re-run with --resume."
         )
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(max_words=max_words, language=language)
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        channel=cfg.get("branding", {}).get("channel_name", "the channel"),
+        tagline=cfg.get("content", {}).get("tagline", "One question. One amazing answer."),
+        language=language, min_words=cfg["script"].get("min_words", max_words - 30), max_words=max_words,
+    )
     try:
         script = _clean_script(_ask(system_prompt, topic, cfg))
 
@@ -96,47 +129,70 @@ def generate_script(topic: str, cfg: dict, language: str = "en") -> str:
     if check["verdict"] == "revised":
         log.info("fact-check revised the script: %s", "; ".join(check["issues"]) or "(no notes)")
         script = check["script"]
+    elif check["verdict"] == "reject":
+        # `auto` would pick another topic; here the topic was chosen by the user, so keep the
+        # script but say plainly that its core answer is shaky.
+        log.warning("fact-check doubts the core answer of %r (%s) — script kept, review it before posting",
+                    topic, "; ".join(check["issues"]) or "no details")
 
     return script
 
 
-_FACTCHECK_SYSTEM = """You are a careful fact-checker for popular-psychology short videos. You receive a video's title, its spoken script and its post caption. Check every claim against well-established findings.
+_FACTCHECK_SYSTEM = """You are the fact-checker and editor for a short-video channel whose promise is "One question. One amazing answer." Categories: Psychology, Science, Space, World, Technology, What if? You receive a video's category, its title (the question), its spoken script (the answer) and its post caption. Judge two things.
 
-- Solid, well-supported claims: keep them exactly.
-- Claims that are contested, oversimplified, or where the mechanism is still debated (competing explanations, failed replications, effects that shrink under scrutiny): rewrite just that sentence so it is accurate but still simple and spoken, for example "one explanation is", "researchers still debate why", "in some studies".
-- Any study, number or researcher you cannot confirm: remove it or make it general. Never add new studies or statistics.
-- Keep the structure (hook, effect plus example, something to do), the conversational tone, plain sentences of 6-25 words ending in periods or question marks, numbers spelled out, and the length close to the original and NEVER above MAX_WORDS words (the video has a hard time limit). The title and the effect stay the same.
-- If the caption repeats a contested claim, fix it too, keeping its format (short lines, blank line, hashtags on one line).
+1. TRUTH. Check every claim against well-established knowledge.
+- Solid claims: keep them exactly.
+- A detail that is oversimplified or slightly off: fix just that sentence, keeping it simple, spoken and confident.
+- A study, number, date or name you cannot confirm: remove it or make it general or rounded. Never add new ones.
+- If the CORE answer itself (what the video presents as the answer to its question) is contested, still argued over by specialists, or not what the evidence shows: verdict "reject". Do not hide it behind hedging words; the channel needs a topic whose answer is settled. For a "What if" video the core answer must be what established physics, chemistry or biology actually predicts; speculation is a reject.
+
+2. WOW. Rate 1-5 how amazing the answer is to a curious non-expert: 5 = jaw-dropping, they will share it; 3 = interesting but familiar; 1 = obvious or dull. Be a tough judge.
+
+Any fixes keep the structure (hook, answer, proof, closing line), the conversational tone, plain sentences of 6-22 words ending in periods or question marks, numbers spelled out, and a length close to the original and NEVER above MAX_WORDS words. The title stays the same. If the caption repeats a wrong claim, fix it too, keeping its format (short lines, blank line, hashtags on one line).
 
 Reply with ONE JSON object and nothing else:
-{"verdict": "ok" or "revised", "issues": ["one short note per problem you found; empty if none"], "script": "...", "description": "..."}
-If the verdict is "ok", return the script and description unchanged."""
+{"verdict": "ok" or "revised" or "reject", "wow": 1-5, "issues": ["one short note per problem; empty if none"], "script": "...", "description": "..."}
+For "ok" and "reject" return the script and description unchanged; put the reasons for a reject in "issues"."""
 
 
-def fact_check(topic: str, script: str, description: str, cfg: dict) -> dict:
-    """Second-opinion pass over a generated script (and caption).
+def fact_check(topic: str, script: str, description: str, cfg: dict, category: str = "") -> dict:
+    """Second-opinion pass over a generated script (and caption): truth and "wow".
 
-    Returns {"verdict": "ok" | "revised" | "skipped", "issues": [...], "script", "description"}.
-    "skipped" (disabled, no backend, call failed, or an unusable answer) always
-    carries the ORIGINAL script/description — a broken check must never break or
-    corrupt the video.
+    Returns {"verdict": "ok" | "revised" | "reject" | "skipped", "wow": int | None, "issues": [...],
+    "script", "description"}. "reject" = the core answer is contested/unsettled, or scored under
+    script.min_wow, so the topic itself should be replaced. "skipped" (disabled, no backend, call
+    failed, or an unusable answer) always carries the ORIGINAL script/description — a broken check
+    must never break or corrupt the video.
     """
-    original = {"verdict": "skipped", "issues": [], "script": script, "description": description}
+    original = {"verdict": "skipped", "wow": None, "issues": [], "script": script, "description": description}
     if not cfg["script"].get("fact_check", True) or llm.backend(cfg) is None:
         return original
     max_words = cfg["script"]["max_words"]
+    min_wow = int(cfg["script"].get("min_wow", 0))
     system = _FACTCHECK_SYSTEM.replace("MAX_WORDS", str(max_words))
-    user = f"Title: {topic}\n\nScript:\n{script}\n\nCaption:\n{description or '(none)'}"
+    user = (f"Category: {category or '(not given)'}\nTitle: {topic}\n\nScript:\n{script}\n\n"
+            f"Caption:\n{description or '(none)'}")
     try:
         text = _ask(system, user, cfg)
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ValueError("no JSON object in the answer")
         data = json.loads(match.group(0))
-        verdict = "revised" if str(data.get("verdict", "")).lower() == "revised" else "ok"
+        verdict = str(data.get("verdict", "")).lower()
+        verdict = verdict if verdict in ("revised", "reject") else "ok"
         issues = [str(i).strip() for i in (data.get("issues") or []) if str(i).strip()]
+        try:
+            wow = int(data.get("wow"))
+        except (TypeError, ValueError):
+            wow = None
+
+        if verdict != "reject" and wow is not None and wow < min_wow:
+            verdict = "reject"
+            issues.append(f"not amazing enough: wow {wow}/5, minimum is {min_wow}")
+        if verdict == "reject":
+            return {"verdict": "reject", "wow": wow, "issues": issues, "script": script, "description": description}
         if verdict == "ok":
-            return {"verdict": "ok", "issues": issues, "script": script, "description": description}
+            return {"verdict": "ok", "wow": wow, "issues": issues, "script": script, "description": description}
 
         new_script = _clean_script(str(data.get("script", "")))
         new_desc = str(data.get("description", "")).replace("\r", "").strip() or description
@@ -147,7 +203,7 @@ def fact_check(topic: str, script: str, description: str, cfg: dict) -> dict:
             )
         if not new_script.rstrip().endswith((".", "!", "?")):
             raise ValueError("revised script does not end with sentence punctuation")
-        return {"verdict": "revised", "issues": issues, "script": new_script, "description": new_desc}
+        return {"verdict": "revised", "wow": wow, "issues": issues, "script": new_script, "description": new_desc}
     except (llm.LLMUnavailable, ValueError, json.JSONDecodeError) as e:
         log.warning("fact-check skipped (%s) — keeping the script as written", e)
         return original
@@ -159,7 +215,7 @@ def generate_description(topic: str, script: str, cfg: dict) -> str | None:
     if llm.backend(cfg) is None:
         return None
     try:
-        text = _ask(_DESCRIPTION_SYSTEM, f"Video title: {topic}\n\nVideo script:\n{script}", cfg).strip()
+        text = _ask(_description_system(cfg), f"Video title: {topic}\n\nVideo script:\n{script}", cfg).strip()
     except llm.LLMUnavailable as e:
         log.warning("could not generate a post description (%s)", e)
         return None

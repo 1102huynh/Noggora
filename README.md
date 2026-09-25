@@ -5,8 +5,12 @@ video dọc .mp4 (1080x1920)** sẵn sàng đăng TikTok/YouTube Shorts/IG Reels
 Reels — script → giọng đọc AI → phụ đề burn-in → hình nền/B-roll → nhạc nền →
 ghép video.
 
-Kênh: **Noggora** — niche tâm lý học/hành vi con người, video 30–45s, faceless,
-hook 3 giây đầu. Pipeline hỗ trợ cả tiếng Anh và tiếng Việt (đổi `--lang` +
+Kênh: **Noggora** — *"One question. One amazing answer."* Mỗi video là **một câu
+hỏi** và **một câu trả lời** khiến người xem bất ngờ, thuộc 6 chuyên mục:
+**Psychology, Science, Space, World, Technology, What if?** (xoay vòng đều). Video
+faceless, hook 3 giây đầu, **độ dài do nội dung script quyết định nhưng tối đa 1
+phút** (thường 30–55 giây). **Giọng đọc luôn là tiếng Anh; chữ trên video là tiếng
+Việt** (`subtitle.language: vi`) cho người xem Việt, người nước ngoài nghe tiếng Anh. Pipeline hỗ trợ cả tiếng Anh và tiếng Việt (đổi `--lang` +
 voice trong config), nhưng hiện tại kênh **chỉ đăng tiếng Anh** — vì vậy
 `data/topic_bank.csv` (nguồn của `auto`) chỉ chứa chủ đề tiếng Anh; muốn làm
 video tiếng Việt vẫn dùng được `single --topic "..." --lang vi`, chỉ là chưa
@@ -105,11 +109,12 @@ python main.py auto
 Bạn tự chạy lệnh này khi muốn có video (không cần đặt lịch, không cần nhập
 topic). Mỗi lần chạy:
 
-1. **Claude viết chủ đề + script + mô tả bài đăng + từ khoá tìm hình mới** cho
-   video hôm nay (`src/daily_topic.py`) — không sinh cả lô trước. Dùng lệnh
-   `claude -p` (Claude Code CLI) bằng **tài khoản Claude Code bạn đang đăng
-   nhập**, không cần `ANTHROPIC_API_KEY`; tốn hạn mức của gói, mỗi lần khoảng
-   20–30 giây.
+1. **Chọn chuyên mục** theo vòng xoay đều (mục 2.0), rồi **Claude viết một câu
+   hỏi + một câu trả lời (script) + mô tả bài đăng + từ khoá tìm hình mới**
+   (`src/daily_topic.py`) — không sinh cả lô trước. Dùng lệnh `claude -p`
+   (Claude Code CLI) bằng **tài khoản Claude Code bạn đang đăng nhập**, không cần
+   `ANTHROPIC_API_KEY`; tốn hạn mức của gói, mỗi lần khoảng 1–2 phút (viết + rà
+   soát sự thật).
 2. **Lưu lại ngay và kiểm tra trùng** (mục 2.1) rồi chạy hết pipeline ra `final.mp4`.
 3. **In sẵn tiêu đề + mô tả (caption kèm hashtag) để copy vào bài đăng** ở cuối
    lệnh, đồng thời lưu ở `output/<job>/post.txt` (`title.txt` và
@@ -121,8 +126,52 @@ topic). Mỗi lần chạy:
    khi Claude lỗi thì đặt `script.fallback_to_bank: true`; hoặc chủ động chạy
    `python main.py auto --bank-only` bất cứ lúc nào.
 
-Nội dung do AI viết — nên đọc lướt script + mô tả trước khi đăng (một số hiệu ứng
-tâm lý còn tranh luận về cơ chế, Claude có thể kể theo 1 giả thuyết như thể đã chắc chắn).
+Nội dung do AI viết — nên đọc lướt script + mô tả trước khi đăng. Bước rà soát sự
+thật giảm rủi ro nhưng vẫn là Claude tự kiểm tra lại chính nó; hình B-roll là clip
+stock nên có thể lệch nhẹ hoặc lộ logo/biển hiệu mà bộ lọc không nhận ra được.
+
+### 2.0a Đăng lên YouTube: `post.youtube.txt`
+
+Mỗi video có sẵn file `output/<job>/post.youtube.txt` xếp theo từng khối để copy-dán (đường dẫn
+cũng được in cuối lệnh `auto`):
+
+- **Tiêu đề:** câu hỏi tiếng Việt (kèm số ký tự, YouTube tối đa 100; quá dài thì có cảnh báo).
+- **Mô tả:** các dòng **tiếng Việt trước** (chỉ ~2 dòng đầu hiện ở màn hình đề xuất nên câu hỏi trùng
+  tiêu đề được bỏ đi để không phí chỗ), dòng "Vietsub — giọng đọc tiếng Anh, phụ đề tiếng Việt.",
+  rồi **bản tiếng Anh** (giúp người tìm bằng tiếng Anh và người Việt đang luyện nghe), rồi **một dòng
+  hashtag**: hashtag tiếng Việt lên trước (3 cái đầu hiện phía trên tiêu đề), có `#vietsub`, luôn có
+  `#shorts`, tối đa 12 cái (YouTube bỏ qua TẤT CẢ nếu quá 15).
+- **Bản tiếng Anh** để dán vào YouTube Studio → Phụ đề → Thêm ngôn ngữ → English (người xem quốc tế
+  thấy đúng ngôn ngữ của họ), và các ghi chú cài đặt (ngôn ngữ video = English).
+- Chữ "Vietsub" đặt ở đâu: `post.youtube.vietsub` = `description` (mặc định) | `title` (thêm
+  "(Vietsub)" vào tiêu đề, tự bỏ nếu vượt 100 ký tự) | `both` | `none`. Chưa có bản dịch tiếng Việt thì
+  file là bản tiếng Anh và có ghi chú.
+
+### 2.0 "One question. One amazing answer." — chuyên mục, độ dài, chất lượng
+
+- **6 chuyên mục** (`content.categories` trong config): Psychology, Science, Space,
+  World, Technology, What if? Mỗi lần `auto` chọn chuyên mục **lâu chưa dùng nhất**
+  (theo cột `category` trong `data/topic_bank_used.csv`), nên bỏ lỡ vài ngày không
+  làm lệch vòng; ép một chuyên mục bằng `python main.py auto --category space`.
+  Bỏ một chuyên mục khỏi config là không làm nó nữa. "What if?" luôn có tiêu đề bắt
+  đầu bằng "What if" và câu trả lời là điều vật lý/hoá/sinh *thực sự* dự đoán.
+- **Một câu hỏi, một câu trả lời:** tiêu đề là câu hỏi; script là câu trả lời, theo
+  cấu trúc *hook → câu trả lời (nói sớm, nói thẳng) → một bằng chứng/ví dụ → một câu
+  chốt đổi cách nhìn*, không lan man, không kể lể nhiều lớp giải thích.
+- **Độ dài theo nội dung, tối đa 1 phút** (`video.max_duration_sec: 60`). Claude viết
+  `script.min_words` 60 → `max_words` 120 từ (giọng ElevenLabs 0.85 đọc ~2.25–2.5
+  từ/giây: 105 từ = 44s, 113 từ = 45s; câu hỏi được đọc trước thêm ~10 từ nên script tối đa 120 từ ≈ 52–58s cả video)
+  và được dặn rõ đây là trần cứng. **Lưới an toàn:** nếu giọng đọc vẫn vượt 60s thì tự **tăng tốc nhẹ** (giữ
+  cao độ, tối đa +25%, không tốn thêm ký tự ElevenLabs) cho vừa, timing caption tự
+  co theo; cần tăng tốc hơn mức đó thì để nguyên và chỉ cảnh báo. Tắt bằng
+  `video.enforce_max_duration: false`. Muốn cho phép video dài hơn: nâng
+  `max_duration_sec` và `max_words` (hệ thống đã chạy thử được video 2 phút 46 giây).
+- **Chọn chủ đề có câu trả lời đã được xác lập *và* gây bất ngờ.** Bước rà soát sự
+  thật giờ có thể **từ chối cả chủ đề** (không chỉ hạ giọng câu chữ): nếu câu trả lời
+  cốt lõi còn tranh cãi giữa các chuyên gia, hoặc chấm "wow" dưới `script.min_wow`
+  (mặc định 3/5), Claude được báo lý do và phải chọn chủ đề khác (tối đa 3 lần).
+- **Nhận diện:** nhãn chuyên mục (chữ + gạch vàng) trên title card và ảnh bìa, màu
+  vàng-cam #FAB032 lấy từ banner kênh cho từ đang đọc/CTA, CTA cuối video là khẩu hiệu.
 
 Cách chọn nguồn viết script đổi ở `script.provider` trong `config/settings.yaml`:
 `claude_cli` (mặc định) | `anthropic_api` (cần `ANTHROPIC_API_KEY`, tính tiền
@@ -141,8 +190,9 @@ qua có chủ ý, để CLI không tính tiền API thay vì dùng gói của b�
 
 Mọi video AI viết đều được **lưu ngay lúc sinh ra** (không chờ render xong, để
 video lỗi giữa chừng vẫn không bị sinh lại vào hôm sau) vào
-`data/topic_bank_used.csv`: chủ đề, script, từ khoá hình, tên hiệu ứng tâm lý
-(cột `effect`) và giờ `used_at`. Script cũng nằm trong `output/<job>/script.txt`
+`data/topic_bank_used.csv`: chủ đề, script, từ khoá hình, chủ thể của video (cột
+`effect`: hiệu ứng tâm lý, hành tinh, công nghệ, kịch bản...), chuyên mục (cột
+`category`) và giờ `used_at`. Script cũng nằm trong `output/<job>/script.txt`
 — render lại cùng script bằng `python main.py single --resume "output/<job>"`.
 
 Trước khi nhận một bản Claude viết, `daily_topic.find_duplicate` so với **toàn bộ
@@ -227,13 +277,19 @@ output/<slug-topic>-<timestamp>/
 ├── script.txt       # lời thoại (do Claude viết, lấy từ bank, hoặc bạn dán tay)
 ├── voice.mp3         # giọng đọc edge-tts
 ├── voice.srt          # phụ đề gốc: mỗi cue là 1 cụm ≤ 6 từ (ngắt theo dấu phẩy)
-├── voice.words.json     # timing từng từ của mỗi cụm (để tô từ đang đọc)
+├── voice.words.json     # timing từng từ (tiếng Anh) của mỗi cụm (để tô từ đang đọc)
+├── voice.intro.json       # câu hỏi được đọc trước script + thời điểm kết thúc (title card bám theo)
+├── voice.vi.srt           # phụ đề TIẾNG VIỆT (dùng làm phụ đề rời trên YouTube nếu muốn)
+├── voice.vi.words.json    # timing của caption tiếng Việt
+├── translation.vi.json    # bản dịch đã lưu (render lại cùng script không hỏi Claude lại)
 ├── voice.ass           # phụ đề đã style + title card mở đầu + CTA cuối (theo config/settings.yaml)
 ├── clips/                # B-roll đã tải (Pexels/Pixabay) hoặc copy từ data/assets_local/
 ├── final.mp4              # ✅ video hoàn chỉnh, sẵn sàng đăng
-├── post.txt                # tiêu đề + mô tả (caption + hashtag) để copy khi đăng
+├── post.youtube.txt       # ✅ ĐÃ XẾP SẴN để dán vào YouTube (tiêu đề Việt, mô tả Việt + Anh, hashtag, bản dịch Anh)
+├── post.txt                # tiêu đề + mô tả thô (tiếng Anh, rồi tiếng Việt)
 ├── title.txt               # riêng tiêu đề
 ├── description.txt         # riêng mô tả
+├── title.vi.txt / description.vi.txt   # bản tiếng Việt (nếu có)
 ├── cover.png               # ảnh bìa 1080x1920 (khung mở đầu + tên kênh + tiêu đề)
 ├── factcheck.txt           # Claude đã sửa/ghi chú gì ở bước kiểm tra sự thật
 ├── entry.json              # dữ liệu lần sinh (từ khoá hình, mô tả...) để `single --resume` render lại y hệt
@@ -242,26 +298,33 @@ output/<slug-topic>-<timestamp>/
 
 ### 4.1 Video được dựng như thế nào
 
-- **Cảnh theo câu:** `src/scenes.py` chia giọng đọc thành ~5 cảnh, cắt ở khoảng
-  lặng giữa các câu (câu quá dài mới cắt giữa câu), độ dài các cảnh gần bằng nhau.
-  Mỗi cảnh có 1 clip B-roll riêng, tìm theo nội dung cảnh đó.
-- **Từ khoá tìm hình**, theo thứ tự ưu tiên: (1) cột `visual_keywords` trong
-  `topic_bank.csv` (cụm từ cách nhau bằng `;`, mỗi cảnh 1 cụm, theo thứ tự
-  hook → cơ chế → ví dụ → hành động); (2) vật cụ thể được nhắc trong câu (movie,
-  coffee, clock... — bảng `_CONCEPT_MAP` trong `visual_fetcher.py`); (3) từ khoá
-  chung về tâm lý. Cảnh lẻ ưu tiên Pexels, cảnh chẵn ưu tiên Pixabay (nguồn kia bù nếu thiếu).
-- **Chọn clip theo độ khớp:** mỗi kết quả được chấm theo số từ khoá trùng với
-  	ags của Pixabay / phần mô tả trong URL của Pexels; clip đủ khớp mới được lấy,
-  không thì thử từ khoá tiếp theo, cuối cùng mới lấy clip khớp nhất tìm được.
-  Số cảnh tự tăng với video dài (isuals.max_scene_sec).
+- **Cảnh theo câu:** `src/scenes.py` chia giọng đọc thành các cảnh dài ~8 giây (tối
+  thiểu 5 cảnh, tối đa `visuals.max_clips` = 40; video 1 phút ≈ 7–8 cảnh), cắt ở
+  khoảng lặng giữa các câu (câu quá dài mới cắt giữa câu), độ dài các cảnh gần bằng
+  nhau. Mỗi cảnh có 1 clip B-roll riêng, tìm theo nội dung cảnh đó.
+- **Từ khoá tìm hình**, theo thứ tự ưu tiên: (1) **1 cụm cho mỗi cảnh do Claude viết
+  sau khi có giọng đọc**, từ đúng lời đang đọc trong cảnh đó (`visuals.plan_keywords`);
+  (2) các cụm Claude viết cùng script (9–30 cụm, rải đều theo số cảnh; lưu ở cột
+  `visual_keywords`); (3) vật cụ thể được nhắc trong câu (movie, moon, satellite,
+  clock... — bảng `_CONCEPT_MAP`); (4) chủ đề dự phòng theo chuyên mục (Space →
+  "galaxy stars"...). Cảnh lẻ ưu tiên Pexels, cảnh chẵn ưu tiên Pixabay (nguồn kia
+  bù nếu thiếu); các cảnh được tải **song song** (`visuals.fetch_workers`).
+- **Chọn clip theo độ khớp:** mỗi kết quả được chấm theo số từ khoá trùng với tags
+  của Pixabay / phần mô tả trong URL của Pexels (bỏ qua các từ chung như "hand",
+  "holding"); clip đủ khớp mới được lấy, không thì thử từ khoá tiếp theo, cuối cùng
+  mới lấy clip khớp nhất tìm được. **Danh sách chặn** (`_BLOCKED_TERMS`): không bao
+  giờ dùng clip có tags thuốc lá, ma tuý, vũ khí, máu, khoả thân, hay bò sát/nhện/
+  côn trùng. Bộ lọc chỉ đọc tags nên **không nhận ra logo/thương hiệu trong hình**.
 - **Nhìn thống nhất:** cùng 1 bộ chỉnh màu (hơi tối, ngả tím) + vignette cho mọi
   clip; clip dọc pan chậm; clip ngang hiện trong khung vuông trên nền mờ; các clip
   crossfade 0.25s.
-- **Hook:** chủ đề (câu hỏi) hiện to ở 2.8s đầu trên nền tối hơn; 2.5s cuối có dòng CTA.
-- **Caption:** cụm ≤ 6 từ, cỡ chữ 68; cả cụm luôn hiện và **từ đang được đọc đổi màu vàng** (karaoke, tắt bằng `subtitle.karaoke: false`); tên hiệu ứng ("sunk cost fallacy"...) luôn tô xanh nhạt.
+- **Hook — câu hỏi được đọc trước:** giọng đọc **câu hỏi (tiêu đề) trước, rồi mới vào script**, trong cùng một lần đọc (`voice.read_title`). Title card (nhãn chuyên mục + câu hỏi, chữ Việt nếu `subtitle.language: vi`) hiện **đúng suốt lúc câu hỏi được đọc** rồi mờ đi; caption chỉ bắt đầu sau đó, không lặp lại câu hỏi. Claude được dặn không viết lại câu hỏi ở đầu script (script lặp lại sẽ bị từ chối và viết lại); script tự viết/cũ mà đã mở đầu bằng chính câu hỏi đó thì tự bỏ qua, không đọc hai lần. Thời điểm câu hỏi kết thúc lưu ở `voice.intro.json`. 2.5s cuối video có dòng CTA "One question. One amazing answer."
+- **Caption:** cụm ≤ 6 từ (tiếng Việt ≤ 7), cỡ chữ 68 (tiếng Việt 62); cả cụm luôn hiện và **từ đang được đọc đổi màu vàng** (karaoke, tắt bằng `subtitle.karaoke: false`).
+- **Chữ trên video là tiếng Việt** (`subtitle.language: vi`, mặc định; `en` để quay về tiếng Anh): sau khi có giọng đọc, Claude dịch tiêu đề + mô tả + **từng câu** trong 1 lần gọi (dịch theo câu chứ không theo cụm để câu tiếng Việt tự nhiên), rồi cắt lại thành caption và rải thời gian theo đúng khoảng câu tiếng Anh đang được đọc (`src/translate.py`). Trong 1 câu thời gian chỉ xấp xỉ (lệch tối đa khoảng 1 giây), giữa các câu thì khớp chính xác. Title card, ảnh bìa và `post.txt` đều có bản tiếng Việt; dịch lỗi thì tự dùng caption tiếng Anh. **Lưu ý:** người xem tắt tiếng mà không biết tiếng Việt sẽ không đọc được gì; nếu cần cả hai, đặt `language: en` cho bản đăng quốc tế.
 - **Âm thanh:** stereo; nhạc nền tự hạ khi có giọng đọc (sidechain ducking); có tiếng `hit` trầm khi title card hiện (`src/sfx.py`, tự tổng hợp; bỏ `hit.*` của bạn vào `data/assets_local/sfx/` để dùng thay). Tiếng `whoosh` ở chỗ chuyển clip đã **tắt** vì nghe chói tai — bật lại bằng `sfx.transitions: true`.
 - **Ảnh bìa:** `cover.png` để chọn làm cover trên TikTok/Shorts/Reels (mục `cover:` trong config).
-- **Kiểm tra sự thật:** sau khi viết, Claude rà soát script + caption thêm 1 lượt (`script.fact_check`): chỗ nào còn tranh cãi (ví dụ cơ chế của moon illusion) được viết lại dè dặt ("researchers still debate..."), số liệu/nghiên cứu không kiểm chứng được thì bỏ; ghi chú ở `factcheck.txt`. Thêm khoảng 20 giây mỗi lần chạy.
+- **Kiểm tra sự thật + chấm "wow":** sau khi viết, Claude rà soát script + caption thêm 1 lượt (`script.fact_check`): chi tiết sai lệch nhỏ thì sửa câu đó, số liệu/nghiên cứu không kiểm chứng được thì bỏ; nếu **câu trả lời cốt lõi** còn tranh cãi hoặc điểm "wow" dưới `script.min_wow` thì **từ chối cả chủ đề** để chọn cái khác. Ghi chú ở `factcheck.txt`. Thêm khoảng 20 giây mỗi lần chạy.
+- **Nếu nâng trần lên vài phút:** nhạc ngắn hơn video được nối các bản sao **crossfade 3 giây** thay vì lặp cứng; filter graph dài (>8.000 ký tự) được ghi ra file rồi đưa cho ffmpeg (`-/filter_complex`, cần ffmpeg ≥ 7) vì Windows giới hạn ~32.000 ký tự cho cả dòng lệnh. Đã chạy thật với script 377 từ: video 2:46, 21 cảnh, render ~5 phút, file ~106 MB, `clips/` ~320 MB.
 
 Mỗi lần chạy tạo 1 thư mục riêng theo slug + timestamp — không bao giờ ghi đè
 job cũ, nên bạn luôn có thể debug/tái sử dụng asset của 1 job cụ thể.
@@ -374,8 +437,7 @@ nguồn viết script (`script.provider`, `cli_model`, `cli_timeout_sec`).
   giọng Neural, có hợp đồng dịch vụ và giới hạn sử dụng rõ ràng.
 - **ElevenLabs (đang bật: `voice.provider: elevenlabs`, giọng George):** gói free
   chỉ cho dùng các giọng **premade** qua API (giọng trong Voice Library báo
-  `402 paid_plan_required`) và có ~10.000 ký tự/tháng — khoảng 15 video, mỗi video
-  ~640 ký tự; xem đã dùng bao nhiêu: `GET /v1/user/subscription`. **Trước khi đăng
+  `402 paid_plan_required`) và có ~10.000 ký tự/tháng. **Mỗi video tốn ~6 ký tự/từ:** 113 từ ≈ 700 ký tự, nên gói free (10.000/tháng) đủ khoảng 12–14 video 1 phút; xem đã dùng bao nhiêu: `GET /v1/user/subscription`. **Trước khi đăng
   lên kênh kiếm tiền, tự kiểm tra điều khoản của ElevenLabs:** theo hiểu biết của
   tôi gói free không có quyền thương mại (và yêu cầu ghi nguồn) — tôi chưa xác
   minh lại điều khoản hiện hành. Nếu hết hạn mức, lỗi, hoặc không muốn dùng: đặt
@@ -385,7 +447,7 @@ nguồn viết script (`script.provider`, `cli_model`, `cli_timeout_sec`).
 - Âm lượng cuối mỗi video được chuẩn hoá về `audio.target_lufs` (mặc định -14 LUFS)
   vì các giọng đọc khác nhau ra mức to nhỏ rất khác nhau (ElevenLabs nhỏ hơn
   edge-tts ~4 dB).
-- Nếu audio sinh ra dài hơn `video.max_duration_sec` (mặc định 45s), pipeline
+- Nếu audio sinh ra dài hơn `video.max_duration_sec` (mặc định 60s), pipeline
   **không tự cắt** — chỉ log warning để bạn biết mà viết script ngắn hơn cho
   lần chạy tiếp theo (tránh mất mát nội dung do cắt tự động).
 
@@ -408,3 +470,34 @@ python -m src.topic_bank         # xem chủ đề kế tiếp mà `auto` sẽ c
 python -m src.music_composer     # xem mood được chọn cho vài chủ đề mẫu + sinh thử 1 track
 python -m src.pipeline           # chạy full 1 job mẫu end-to-end
 ```
+
+### 8.1 Bộ test tự động (`tests/`)
+
+```bash
+pip install -r requirements-dev.txt     # thêm pytest
+python -m pytest                        # ~260 test, ~30 giây, không cần mạng
+```
+
+Không gọi mạng, không đụng `data/` hay `.env`: Claude/CLI được giả lập, video và âm thanh
+test được tạo bằng ffmpeg ở kích thước rất nhỏ trong thư mục tạm. Test cần ffmpeg (đánh dấu
+`ffmpeg`) tự bỏ qua nếu máy không có.
+
+| File | Bảo vệ điều gì |
+|---|---|
+| `test_scenes.py` | chia cảnh liền mạch, đều nhau, ưu tiên cắt ở khoảng lặng giữa câu |
+| `test_daily_topic.py` | phát hiện chủ đề/hiệu ứng/nội dung trùng, đọc JSON của Claude, vòng sinh lại có phản hồi, khi nào trả `None` để `auto` dừng |
+| `test_music_composer.py` | thư mục theo thể loại, phát theo thứ tự tên file + quay vòng, không "ăn" lượt khi video lỗi, mood theo chủ đề |
+| `test_captions.py` | chia cụm caption, tô tên hiệu ứng, karaoke từng từ, title card + CTA |
+| `test_visual_fetcher.py` | rải từ khoá theo cảnh, chấm độ khớp clip, chọn nguồn/clip, chịu lỗi tìm kiếm |
+| `test_topic_bank_llm_utils.py` | lịch sử chủ đề + nâng cấp header CSV, chọn nguồn viết script, gọi CLI đúng cách, đo LUFS |
+| `test_video_assembler.py` | **ghép video thật bằng ffmpeg** với mọi tổ hợp giọng/nhạc/SFX (stereo, đúng độ dài, cân mức nhạc, ảnh bìa) |
+| `test_intro.py` | đọc câu hỏi trước script (không đọc hai lần nếu script đã mở đầu bằng nó), tách câu hỏi khỏi caption, `generate_voice` với TTS giả, script lặp lại tiêu đề bị từ chối |
+| `test_post_text.py` | `post.youtube.txt`: tách hashtag, thứ tự hashtag Việt trước, `#shorts` luôn có, giới hạn 100 ký tự / 12 hashtag, các chỗ đặt "Vietsub", bỏ dòng trùng tiêu đề, không có bản dịch |
+| `test_translate.py` | gom câu, gọi dịch Claude (thiếu câu/tiêu đề thì từ chối để dùng tiếng Anh), rải thời gian cho caption tiếng Việt, lưu và tái dùng bản dịch, dấu tiếng Việt trên ASS |
+| `test_categories_and_length.py` | xoay vòng 6 chuyên mục, luật tiêu đề (câu hỏi / "What if"), từ chối chủ đề (tranh cãi, "wow" thấp), nhãn chuyên mục, từ khoá theo cảnh, tải song song 23 cảnh, nhạc ngắn nối crossfade, filter 30 clip qua file |
+
+Nhiều test là lỗi đã từng xảy ra thật (filter thiếu dấu phẩy, mix bị mono, mood `warm` không
+có nhạc, nhạc to hơn giọng...). Đã kiểm tra ngược: đưa lại từng lỗi vào một bản sao của code
+thì test tương ứng báo đỏ. **Giới hạn đã biết:** lỗi true-peak vượt +0.1 dBFS trên video
+40 giây không tái hiện được ở kích thước nhỏ, nên chỉ có test cấu trúc (bộ giới hạn phải
+đứng sau `loudnorm`) chứ không có test hành vi cho đúng lỗi đó.

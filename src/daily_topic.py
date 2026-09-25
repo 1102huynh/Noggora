@@ -1,14 +1,18 @@
 """Write today's video from scratch: ask an LLM (the Claude Code CLI or the
-Anthropic API — see src/llm.py) for one brand-new psychology topic, its script
-and per-scene stock-footage search phrases, instead of drawing from a
-pre-generated batch.
+Anthropic API — see src/llm.py) for one brand-new question, its one amazing
+answer (the script), the post caption and per-scene stock-footage phrases.
 
-Every answer is checked against everything already made (the used archive and
-the pre-written bank) before it is accepted: same topic, same underlying
-effect, or a topic/script that reads like an existing one is rejected and the
-model is asked again, told exactly what it collided with. Returns None when no
-acceptable answer comes back (or no backend is available), so the caller can
-fall back to the pre-written bank.
+The channel's promise is "One question. One amazing answer." The category
+(Psychology, Science, Space, World, Technology, What if?) rotates evenly — see
+src/categories.py — and every answer is held to the same bar:
+
+  - it must not repeat or resemble anything already made (same subject, a
+    re-worded question, a script that reads alike -> rejected, model told why);
+  - a second pass fact-checks it and scores how amazing it is; a contested core
+    answer, or a score under script.min_wow, rejects the topic itself.
+
+Returns None when no acceptable answer comes back (or no backend is available),
+so the caller can stop or fall back to the pre-written bank.
 """
 
 from __future__ import annotations
@@ -16,50 +20,36 @@ from __future__ import annotations
 import difflib
 import json
 import re
-from datetime import date
 from pathlib import Path
 
-from src import llm, music_composer, script_generator, topic_bank
+from src import categories, llm, music_composer, script_generator, topic_bank, voice_generator
 from src.utils import get_logger
 
 log = get_logger("daily_topic")
 
-# Rotated through by day so consecutive videos don't all come from the same corner of psychology.
-_AREAS = [
-    "cognitive biases and mental shortcuts",
-    "memory and attention",
-    "social influence and group behavior",
-    "decision making and money psychology",
-    "emotions and mood",
-    "motivation, habits and procrastination",
-    "persuasion and everyday manipulation tactics",
-    "self-perception and confidence",
-    "relationships and trust",
-    "perception and illusions",
-]
+_SYSTEM_TEMPLATE = """You write for {channel}, a faceless short-video channel (TikTok / YouTube Shorts / Reels). Its promise, and the test every video must pass: "{tagline}"
 
-_SYSTEM_TEMPLATE = """You write scripts for "Noggora", a faceless psychology short-video channel (TikTok / YouTube Shorts / Reels). Videos are 30-40 seconds, read aloud by a text-to-speech voice, with burned-in captions.
+Each video is ONE question the viewer is dying to know the answer to, and ONE amazing answer. A voice reads the question aloud first, then your script, with captions burned in; the question is also shown as the title card.
 
-Produce ONE new video. Reply with a single JSON object and nothing else (no markdown fences, no commentary):
-{{"effect": "...", "topic": "...", "mood": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "...", "...", "..."]}}
+TODAY'S CATEGORY: {label}
+{brief}
 
-effect: the name of the psychological effect, bias or principle the video is about, as psychologists name it (for example "sunk cost fallacy").
+Produce ONE video in this category. Reply with a single JSON object and nothing else (no markdown fences, no commentary):
+{{"subject": "...", "topic": "...", "mood": "...", "script": "...", "description": "...", "visual_keywords": ["...", "...", "..."]}}
 
-topic: the video's title, phrased as a curiosity question addressed to the viewer, under 75 characters (for example "Why do you keep watching a bad movie to the end?").
+subject: what the video is about, 2-5 words, as an encyclopaedia would title it (for example "sunk cost fallacy", "neutron stars", "GPS time dilation", "an Earth without the Moon").
 
-mood: which background music suits the TOPIC. Exactly one of: "mysterious" (hidden influences, secrets, illusions, things you don't notice), "tense" (fear, pressure, loss, judgment, stress), "curious" (puzzling everyday quirks, memory, perception, "why does this happen"), "warm" (trust, relationships, kindness, connection, hope), "playful" (light, funny, low-stakes everyday habits). When unsure, "mysterious".
+topic: THE QUESTION. Addressed to the viewer, under 75 characters, ending with a question mark, with a real curiosity gap that makes someone stop scrolling. {topic_rule}
 
-script: English, {min_words}-{max_words} words, spoken and conversational, not academic. Structure:
-  1. Sentence one is a hook: a curiosity gap or a paradox the viewer recognises from their own life.
-  2. The middle names the effect and explains it with one concrete everyday example.
-  3. The last sentence gives the viewer something they can do or a new way to see it right away.
-Rules: plain sentences of 6-25 words, ending in periods or question marks, with commas where a speaker would pause. Spell numbers out as words. No emojis, hashtags, markdown, stage directions, or headings. Only well-established findings: never invent a study, statistic or researcher; if you are unsure of the details of a study, describe the effect in general terms instead.
+mood: which background music suits the topic. Exactly one of: "mysterious" (hidden forces, secrets, illusions, the unseen), "tense" (danger, pressure, loss, stakes), "curious" (puzzling everyday quirks, discovery, "how is that even possible"), "warm" (connection, kindness, hope, wonder at life), "playful" (light, funny, low-stakes). When unsure, "mysterious".
 
-description: the caption to paste under the post on TikTok / YouTube Shorts / Instagram Reels, in English. {description_rules}
+script: English, between {min_words} and {max_words} words. The voice reads about 2.4 words per second and the whole video MUST stay under ONE MINUTE, so {max_words} words is a hard ceiling and most great answers fit in {typical}. {structure}
 
-visual_keywords: exactly 5 short stock-footage search phrases (2-4 words each, plain English) for Pexels/Pixabay, one per part of the script in order (hook, explanation, example, insight, action). Each must describe something concrete a camera can film (people, places, objects), never an abstract concept, and never a person's name or a brand.
+description: the caption to paste under the post, in English. {description_rules}
 
-Every video must cover a DIFFERENT effect and a different everyday situation from all earlier ones. Never repeat, re-word, or write a second take on an earlier video. Earlier videos (topic, and effect where known):
+visual_keywords: short stock-footage search phrases (2-4 words each, plain English) for Pexels/Pixabay, in the order the footage should appear across the whole script: the opening hook, the answer, the proof or example, the closing line. Write roughly one per 15-20 words of your script (at least 6); the video changes shot about every 8 seconds, so every phrase must work on its own as a different shot. Suitable footage for this category: {footage}. Each phrase must describe something concrete a camera can film, never an abstract concept, and never a person's name or a brand.
+
+Choose an answer that is (a) true and settled among specialists and (b) genuinely surprising to a curious non-expert. If the best-known example of a topic is still argued over, choose another. Every video covers a DIFFERENT subject and angle from all earlier ones; never repeat, re-word, or write a second take on an earlier video. Earlier videos (question [subject, category]):
 {exclude}"""
 
 # --- duplicate detection -----------------------------------------------------
@@ -72,12 +62,13 @@ _STOPWORDS = {
     "person", "brain", "mind", "called", "known", "effect", "bias", "its", "it's", "you're", "that's",
 }
 
-# Reject thresholds. Chosen against the real archive: distinct effects score
+# Reject thresholds. Chosen against the real archive: distinct subjects score
 # well below these on script/topic overlap; a re-worded take on the same idea
-# scores well above (see the check in this module's history / README).
+# scores well above (see tests/test_daily_topic.py).
 _TOPIC_SEQ_RATIO = 0.72
 _TOPIC_WORD_OVERLAP = 0.67  # real, different videos reach 0.5 on shared everyday words ("partner", "know")
 _SCRIPT_WORD_OVERLAP = 0.32
+_MIN_SUBJECT_LEN_FOR_TEXT_MATCH = 8  # "Mars" appears in plenty of unrelated scripts; "pareidolia" does not
 
 
 def _norm(text: str) -> str:
@@ -115,7 +106,8 @@ def _effect_key(effect: str) -> str:
 
 def find_duplicate(entry: dict, known_rows: list[dict]) -> str | None:
     """Why `entry` must be rejected (a human-readable reason naming the
-    existing video it collides with), or None if it is new enough."""
+    existing video it collides with), or None if it is new enough.
+    `entry["effect"]` is the video's subject (an effect, a planet, a scenario...)."""
     topic_norm = _norm(entry["topic"])
     effect_norm = _norm(entry.get("effect", ""))
     effect_key = _effect_key(entry.get("effect", ""))
@@ -130,10 +122,10 @@ def find_duplicate(entry: dict, known_rows: list[dict]) -> str | None:
         old_text = _norm(f"{row['topic']} {row.get('script', '')}")
         old_effect = _norm(row.get("effect", ""))
         if effect_norm and (effect_norm == old_effect or (effect_key and effect_key == _effect_key(row.get("effect", "")))):
-            return f"effect {entry['effect']!r} was already covered by: {old_topic!r}"
-        # pre-written bank rows have no effect column, but their script names the effect
-        if effect_norm and f" {effect_norm} " in f" {old_text} ":
-            return f"effect {entry['effect']!r} is already named in an earlier video: {old_topic!r}"
+            return f"subject {entry['effect']!r} was already covered by: {old_topic!r}"
+        # pre-written bank rows have no subject column, but their script names the effect
+        if len(effect_norm) >= _MIN_SUBJECT_LEN_FOR_TEXT_MATCH and f" {effect_norm} " in f" {old_text} ":
+            return f"subject {entry['effect']!r} is already named in an earlier video: {old_topic!r}"
 
         if difflib.SequenceMatcher(None, topic_norm, _norm(old_topic)).ratio() >= _TOPIC_SEQ_RATIO:
             return f"topic is a re-wording of an earlier one: {old_topic!r}"
@@ -146,12 +138,14 @@ def find_duplicate(entry: dict, known_rows: list[dict]) -> str | None:
 
 # --- generation --------------------------------------------------------------
 
-def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
+def _parse_entry(
+    text: str, min_words: int, max_words: int, category: dict | None = None, read_title: bool = True,
+) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("no JSON object in the answer")
     data = json.loads(match.group(0))
-    effect = str(data.get("effect", "")).strip().strip('"')
+    subject = str(data.get("subject") or data.get("effect") or "").strip().strip('"')
     topic = str(data.get("topic", "")).strip().strip('"')
     script = re.sub(r"[*_#`~]", "", str(data.get("script", ""))).strip().strip('"')
     description = str(data.get("description", "")).replace("\r", "").strip()
@@ -160,8 +154,17 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
         mood = ""  # unusable -> the music picker falls back to the topic's keywords
     keywords = [str(k).strip() for k in (data.get("visual_keywords") or []) if str(k).strip()]
 
-    if not effect or not topic or not script:
-        raise ValueError("effect, topic or script missing")
+    if not subject or not topic or not script:
+        raise ValueError("subject, topic or script missing")
+    if not topic.endswith("?"):
+        raise ValueError("the title must be a question ending with '?'")
+    if category and category["id"] == "whatif" and not topic.lower().startswith("what if"):
+        raise ValueError('a "What if?" video\'s title must start with "What if"')
+    if read_title and voice_generator.intro_for(topic, script) is None:
+        raise ValueError(
+            "the script's first sentence repeats the title, but the title is read aloud before the script: "
+            "start with a hook that builds on the question instead"
+        )
     words = len(script.split())
     if not (min_words <= words <= max_words):
         raise ValueError(f"script is {words} words, wanted {min_words}-{max_words}")
@@ -170,63 +173,85 @@ def _parse_entry(text: str, min_words: int, max_words: int) -> dict:
     if len(keywords) < 3:
         raise ValueError(f"only {len(keywords)} visual_keywords")
     return {
-        "effect": effect, "topic": topic, "language": "en", "script": script, "mood": mood,
-        "description": description, "visual_keywords": ";".join(keywords[:5]),
+        "effect": subject, "category": category["id"] if category else "", "topic": topic, "language": "en",
+        "script": script, "mood": mood, "description": description, "visual_keywords": ";".join(keywords[:40]),
     }
 
 
 def _describe_known(rows: list[dict], limit: int = 150) -> str:
     lines = []
     for r in rows[-limit:]:
-        effect = f" [{r['effect']}]" if r.get("effect") else ""
-        lines.append(f"- {r['topic']}{effect}")
+        tags = ", ".join(t for t in (r.get("effect"), r.get("category")) if t)
+        lines.append(f"- {r['topic']}" + (f" [{tags}]" if tags else ""))
     return "\n".join(lines) or "(none yet)"
 
 
-def _fact_checked(entry: dict, cfg: dict) -> dict:
-    """Run the accuracy pass; on a revision, swap in the corrected script and
-    caption. `fact_check_notes` records what was found (written to the job's
-    factcheck.txt by main.py)."""
-    result = script_generator.fact_check(entry["topic"], entry["script"], entry.get("description", ""), cfg)
+def _fact_checked(entry: dict, cfg: dict, category: dict | None) -> dict:
+    """Run the accuracy + wow pass. A revision swaps in the corrected script and caption; a reject
+    raises ValueError so the caller asks for a different topic. `fact_check_notes` records what was
+    found (written to the job's factcheck.txt by main.py)."""
+    label = category["label"] if category else ""
+    result = script_generator.fact_check(entry["topic"], entry["script"], entry.get("description", ""), cfg, label)
     entry["fact_check"] = result["verdict"]
     entry["fact_check_notes"] = result["issues"]
+    entry["wow"] = result.get("wow")
+    if result["verdict"] == "reject":
+        raise ValueError(
+            "REJECTED by the fact-checker: " + ("; ".join(result["issues"]) or "core answer not settled")
+            + ". Choose a different subject whose answer is settled and truly surprising."
+        )
     if result["verdict"] == "revised":
-        log.info("fact-check revised the script: %s", "; ".join(result["issues"]) or "(no notes)")
+        log.info("fact-check revised the script (wow %s): %s", result.get("wow"), "; ".join(result["issues"]) or "(no notes)")
         entry["script"] = result["script"]
         entry["description"] = result["description"]
     else:
-        log.info("fact-check: %s%s", result["verdict"], f" — {'; '.join(result['issues'])}" if result["issues"] else "")
+        log.info("fact-check: %s (wow %s)%s", result["verdict"], result.get("wow"),
+                 f" — {'; '.join(result['issues'])}" if result["issues"] else "")
     return entry
 
 
 def generate_daily_entry(
     cfg: dict, bank_path: Path = topic_bank.DEFAULT_BANK_PATH, used_path: Path = topic_bank.DEFAULT_USED_PATH,
-    max_attempts: int = 3,
+    max_attempts: int = 3, category: str | None = None,
 ) -> dict | None:
-    """One fresh {effect, topic, language, script, visual_keywords} for today
-    that is not a repeat or near-repeat of anything already made, or None if the
-    LLM is unavailable or never produced an acceptable answer."""
+    """One fresh {effect (subject), category, topic (the question), language, script (the answer),
+    mood, description, visual_keywords} for today that is not a repeat or near-repeat of anything
+    already made and survived the fact-check, or None if the LLM is unavailable or never produced an
+    acceptable answer. `category` (an id from config content.categories) overrides the rotation."""
     if llm.backend(cfg) is None:
         log.info("no LLM backend available — skipping daily generation")
         return None
 
-    max_words = int(cfg["script"]["max_words"])
-    min_words = max(60, max_words - 35)
+    script_cfg = cfg["script"]
+    max_words = int(script_cfg["max_words"])
+    min_words = int(script_cfg.get("min_words", max(60, max_words - 35)))
     known = topic_bank.all_known_rows(bank_path, used_path)
-    area = _AREAS[date.today().toordinal() % len(_AREAS)]
+    cat = categories.pick_next(cfg, known, forced=category)
+    content = cfg.get("content", {})
     system = _SYSTEM_TEMPLATE.format(
-        min_words=min_words, max_words=max_words, exclude=_describe_known(known),
-        description_rules=script_generator.DESCRIPTION_RULES,
+        channel=cfg.get("branding", {}).get("channel_name", "the channel"),
+        tagline=content.get("tagline", "One question. One amazing answer."),
+        label=cat["label"], brief=cat.get("brief", ""),
+        topic_rule='It MUST start with "What if".' if cat["id"] == "whatif" else "",
+        min_words=min_words, max_words=max_words, typical=f"{min_words + 25}-{max_words - 15} words",
+        structure=script_generator.SCRIPT_STRUCTURE,
+        description_rules=script_generator.description_rules(cat.get("hashtags")),
+        footage=categories.FOOTAGE_HINTS.get(cat["id"], "concrete, filmable scenes"),
+        exclude=_describe_known(known),
     )
+    log.info("category for this video: %s", cat["label"])
 
-    user = f"Today's focus area: {area}. Write today's video."
+    user = f"Category: {cat['label']}. Write today's video."
     for attempt in range(1, max_attempts + 1):
         try:
-            entry = _parse_entry(llm.complete(system, user, cfg, max_tokens=1500), min_words, max_words)
+            entry = _parse_entry(
+                llm.complete(system, user, cfg, max_tokens=4000), min_words, max_words, cat,
+                read_title=cfg.get("voice", {}).get("read_title", True),
+            )
             reason = find_duplicate(entry, known)
             if reason is None:
-                log.info("generated today's video [%s] (%s): %s", entry["effect"], area, entry["topic"])
-                return _fact_checked(entry, cfg)
+                log.info("generated [%s / %s]: %s", cat["label"], entry["effect"], entry["topic"])
+                return _fact_checked(entry, cfg, cat)
             raise ValueError(f"REJECTED as a repeat: {reason}")
         except llm.LLMUnavailable as e:
             log.warning("LLM unavailable (%s) — falling back to the pre-written bank", e)
@@ -234,18 +259,21 @@ def generate_daily_entry(
         except (ValueError, json.JSONDecodeError) as e:
             log.warning("attempt %d/%d: %s", attempt, max_attempts, e)
             user = (
-                f"Today's focus area: {area}. Write today's video.\n\n"
-                f"Your previous answer was not accepted: {e}. Pick a completely different effect "
-                "and a different everyday situation, and follow the format and word count exactly."
+                f"Category: {cat['label']}. Write today's video.\n\n"
+                f"Your previous answer was not accepted: {e}. Pick a completely different subject "
+                "and angle, and follow the format, question and word count exactly."
             )
     return None
 
 
 if __name__ == "__main__":
+    import sys
+
     from dotenv import load_dotenv
 
     from src.utils import load_config
 
     load_dotenv()
-    result = generate_daily_entry(load_config())
+    forced = sys.argv[1] if len(sys.argv) > 1 else None  # e.g. python -m src.daily_topic space
+    result = generate_daily_entry(load_config(), category=forced)
     print(json.dumps(result, indent=2, ensure_ascii=False) if result else "no entry generated")

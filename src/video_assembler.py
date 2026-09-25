@@ -16,6 +16,7 @@ Look & feel, all done inside one filter graph:
 from __future__ import annotations
 
 import itertools
+import math
 import subprocess
 from pathlib import Path
 
@@ -39,6 +40,10 @@ _GRADE = (
     "lutrgb=r='val*0.97':g='val*0.99':b='min(val*1.05+6,255)',"
     "vignette=PI/5"
 )
+
+
+_MUSIC_XFADE = 3.0          # seconds two chained copies of a short music track overlap
+_MAX_INLINE_FILTER = 8000   # characters; a longer filter graph is passed as a file
 
 
 def _escape_ffmpeg_filter_path(path: Path) -> str:
@@ -106,10 +111,10 @@ def _music_gain_db(voice_path: Path, music_path: Path, seconds: float, music_cfg
     return gain
 
 
-def make_cover(clip: Path, title: str, out_path: Path, cfg: dict) -> Path:
+def make_cover(clip: Path, title: str, out_path: Path, cfg: dict, category_label: str = "") -> Path:
     """A 1080x1920 cover image (for the platform's cover/thumbnail picker): a
     frame of the opening scene, in the video's colour grade, dimmed, with the
-    channel name on top and the title big in the middle."""
+    channel name on top, the category tag and the title big in the middle."""
     video_cfg = cfg["video"]
     width, height, fps = video_cfg["width"], video_cfg["height"], video_cfg["fps"]
     cover_cfg = cfg.get("cover", {})
@@ -117,7 +122,7 @@ def make_cover(clip: Path, title: str, out_path: Path, cfg: dict) -> Path:
 
     ass_path = subtitle_burner.write_cover_ass(
         title, out_path.with_suffix(".ass"), cfg["subtitle"], cover_cfg, width, height,
-        brand=cfg.get("branding", {}).get("channel_name", ""),
+        brand=cfg.get("branding", {}).get("channel_name", ""), category_label=category_label,
     )
     graph = (
         _clip_filter(0, clip, width, height, fps, 6.0, zoom)
@@ -193,10 +198,19 @@ def assemble_video(
 
     next_input = voice_idx + 1
     music_idx = None
+    music_copies = 1
     if music_path is not None:
         music_idx = next_input
-        next_input += 1
-        args += ["-stream_loop", "-1", "-t", f"{audio_duration:.3f}", "-i", str(music_path)]
+        track_len = ffprobe_duration(music_path)
+        if 2 * _MUSIC_XFADE < track_len < audio_duration - 0.5:
+            # A 3-minute video outlasts most tracks. `-stream_loop` would restart the track with a
+            # hard cut; instead chain copies of it, each crossfaded into the next.
+            music_copies = min(math.ceil((audio_duration - _MUSIC_XFADE) / (track_len - _MUSIC_XFADE)), 16)
+            for _ in range(music_copies):
+                args += ["-i", str(music_path)]
+        else:
+            args += ["-stream_loop", "-1", "-t", f"{audio_duration:.3f}", "-i", str(music_path)]
+        next_input += music_copies
 
     # --- sound effects: a whoosh centred on each crossfade, a hit under the title card ---
     sfx_cfg = cfg.get("sfx", {})
@@ -266,8 +280,18 @@ def assemble_video(
         volume_db = _music_gain_db(audio_path, music_path, audio_duration, music_cfg)
         fade_out_start = max(audio_duration - 1.5, 0.0)
         filter_parts.append(f"[{voice_idx}:a]{voice_prep},asplit=2[voice_a][voice_sc]")
+        if music_copies > 1:
+            for k in range(music_copies):
+                filter_parts.append(f"[{music_idx + k}:a]aresample=44100[mc{k}]")
+            src = "[mc0]"
+            for k in range(1, music_copies):
+                filter_parts.append(f"{src}[mc{k}]acrossfade=d={_MUSIC_XFADE:g}[mx{k}]")
+                src = f"[mx{k}]"
+            music_head = src
+        else:
+            music_head = f"[{music_idx}:a]aresample=44100,"
         filter_parts.append(
-            f"[{music_idx}:a]aresample=44100,volume={volume_db}dB,"
+            f"{music_head}volume={volume_db}dB,"
             f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out_start:.3f}:d=1.5[music_pre]"
         )
         filter_parts.append(
@@ -320,8 +344,18 @@ def assemble_video(
 
     filter_complex = ";".join(filter_parts)
 
+    # A 3-minute video has ~25 clips and its filter graph runs to tens of thousands of characters;
+    # Windows caps a whole command line at ~32,000, so long graphs go in a file (ffmpeg >= 7 syntax).
+    graph_file = None
+    if len(filter_complex) > _MAX_INLINE_FILTER:
+        graph_file = out_path.with_suffix(".filtergraph.txt")
+        graph_file.write_text(filter_complex, encoding="utf-8")
+        filter_args = ["-/filter_complex", str(graph_file)]
+    else:
+        filter_args = ["-filter_complex", filter_complex]
+
     args += [
-        "-filter_complex", filter_complex,
+        *filter_args,
         "-map", "[vout]",
         "-map", audio_map,
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "20",
@@ -337,6 +371,8 @@ def assemble_video(
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed (exit {result.returncode}):\n{result.stderr[-4000:]}")
+    if graph_file is not None:
+        graph_file.unlink(missing_ok=True)  # kept when ffmpeg fails, for debugging
 
     final_duration = ffprobe_duration(out_path)
     if abs(final_duration - audio_duration) > 0.5:
